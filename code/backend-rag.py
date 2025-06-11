@@ -137,12 +137,13 @@ def retrieve_context(query, collection, embedding_model, n_results=5):
     )
     
     context = "\n\n---\n\n".join(results['documents'][0])
-    sources = set(meta['source'] for meta in results['metadatas'][0])
+    sources = sorted(list(set(meta['source'] for meta in results['metadatas'][0])))
     logging.info(f"Retrieved context from sources: {list(sources)}")
     
-    return context
+    return context, sources
 
-def generate_answer(query, context):
+def generate_answer(query, context, sources):
+    sources_text = "\n".join(f"- {source}" for source in sources)
     prompt_template = f"""
     You are a helpful medical information assistant. 
     Your task is to answer the user's question based *only* on the provided context from Mayo Clinic documents. 
@@ -219,8 +220,8 @@ def main():
             if not query.strip():
                 continue
             
-            context = retrieve_context(query, collection, embedding_model)
-            answer = generate_answer(query, context)
+            context, sources = retrieve_context(query, collection, embedding_model)
+            answer = generate_answer(query, context, sources)
             
             print("\nAnswer:")
             print(answer)
