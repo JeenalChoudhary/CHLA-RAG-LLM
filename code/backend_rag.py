@@ -149,7 +149,6 @@ def generate_answer(query, context, sources):
     prompt_template = f"""
     You are a helpful medical information assistant. 
     Your task is to answer the user's question based *only* on the provided context from Mayo Clinic documents. 
-    After providing the answer, you MUST list the sources you used under a 'Sources:' heading. Use the list of filenames provided below. 
     If the information is not in the context, explicitly state that you cannot answer the question with the given information and do not list any sources. 
     
     CONTEXT: {context}
