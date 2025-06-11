@@ -15,7 +15,8 @@ import logging
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-PDF_DIRECTORY = "docs"
+SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+PDF_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "docs")
 DB_PATH = "chroma_db"
 COLLECTION_NAME = "example_health_docs"
 
