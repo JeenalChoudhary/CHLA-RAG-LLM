@@ -1,8 +1,8 @@
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import os
-import logging
 import torch
 import streamlit as st
-import requests
 from sentence_transformers import SentenceTransformer
 import backend_rag as main  # Assumes your CLI script is named main.py and in the same directory
 

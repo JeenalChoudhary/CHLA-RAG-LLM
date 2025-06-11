@@ -1,3 +1,5 @@
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import os
 import re
 import fitz
@@ -8,7 +10,6 @@ import argparse
 from sentence_transformers import SentenceTransformer
 import torch
 import logging
-from typing import Tuple, List
 
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
