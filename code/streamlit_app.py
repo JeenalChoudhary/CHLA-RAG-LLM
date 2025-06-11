@@ -4,7 +4,7 @@ import torch
 import streamlit as st
 import requests
 from sentence_transformers import SentenceTransformer
-import main  # Assumes your CLI script is named main.py and in the same directory
+import backend-rag as main  # Assumes your CLI script is named main.py and in the same directory
 
 # ---- Configurations ----
 EMBEDDING_MODEL_NAME = main.EMBEDDING_MODEL_NAME
