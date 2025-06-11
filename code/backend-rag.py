@@ -19,7 +19,7 @@ COLLECTION_NAME = "example_health_docs"
 
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
-OLLAMA_MODEL_NAME = "llama4:scout"
+OLLAMA_MODEL_NAME = "gemma3:latest"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
 CHUNK_SIZE = 768
