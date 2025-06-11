@@ -1,9 +1,7 @@
-python==3.11
-pip==25.1.1
-streamlit==1.41.1
-PyMuPDF==1.25.3
+streamlit
+PyMuPDF
 numpy<2.0
-torch==2.5.1
-sentence_transformers==3.0.1
-chromadb==1.0.12
-requests==2.32.4
+torch
+sentence_transformers
+chromadb
+requests
