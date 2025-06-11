@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PDF_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "docs")
-DB_PATH = "chroma_db"
+DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
