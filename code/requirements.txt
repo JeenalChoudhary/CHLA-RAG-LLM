@@ -1,7 +1,8 @@
-chromadb==1.0.12
-PyMuPDF==1.25.3
-Requests==2.32.4
-sentence_transformers==3.0.1
+python==3.11
 streamlit==1.41.1
+PyMuPDF==1.25.3
+numpy<2.0
 torch==2.5.1
-pysqlite3-binary
+sentence_transformers==3.0.1
+chromadb==1.0.12
+requests==2.32.4
