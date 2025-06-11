@@ -2,11 +2,13 @@ import os
 import re
 import fitz
 import chromadb
+import requests
 import json
 import argparse
-import sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer
 import torch
 import logging
+from typing import Tuple, List
 
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,7 +17,7 @@ PDF_DIRECTORY = "docs"
 DB_PATH = "chroma_db"
 COLLECTION_NAME = "example_health_docs"
 
-EMBEDDING_MODEL_NAME = "microsoft/BiomedVLP-PubMedBERT-base-uncased-abstract-fulltext"
+EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
 OLLAMA_MODEL_NAME = "llama4:scout"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
@@ -26,7 +28,7 @@ CHUNK_OVERLAP = 75
 
 # ---- Text extraction and cleaning ----
 def clean_pdf_text(text):
-    text = re.sub(r'MAYO\s*CLINIC.*(?:\n.*)*?(?:Request an Appointment|Log in|Symptoms &|causes|Diagnosis &|treatment|Doctors &|departments)'. '', text, flags=re.IGNORECASE)
+    text = re.sub(r'MAYO\s*CLINIC.*(?:\n.*)*?(?:Request an Appointment|Log in|Symptoms &|causes|Diagnosis &|treatment|Doctors &|departments)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'https?://[^\s]+', '', text)
     text = re.sub(r'\d{1,2}/\d{1,2}/\d{2,4}, \d{1,2}:\d{2,2} [AP]M', '', text)
     text = re.sub(r'\d+/\d+', '', text)
@@ -113,10 +115,10 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
             all_embeddings.extend(embeddings)
             logging.info(f"Embedded batch {i//batch_size+1}/{(len(contents) + batch_size - 1)//batch_size}")
         
-        collections.add(
+        collection.add(
             embeddings=all_embeddings,
             documents=contents,
-            metadata=metadatas,
+            metadatas=metadatas,
             ids=ids
         )
         logging.info(f"Successfully added {len(documents)} chunks to ChromaDB")
@@ -184,7 +186,7 @@ def main():
     parser = argparse.ArgumentParser(description="A RAG chatbot for patient and family healthcare education")
     parser.add_argument(
         "--rebuild-db",
-        actions="store_true",
+        action="store_true",
         help="Force the reprocessing of PDFs and rebuilding of the vector database."
     )
     args = parser.parse_args()
@@ -207,6 +209,7 @@ def main():
             return
     
     collection = setup_chromadb(documents, embedding_model, rebuild=args.rebuild_db)
+    print(f"DEBUG: Found {collection.count()} documents in the ChromaDB collection.\n")
     
     print("\n--- Patient Health Education RAG Chatbot Demonstration ---")
     print(f"LLM: {OLLAMA_MODEL_NAME} | Embedding: PubMedBERT | DB: ChromaDB")
@@ -214,7 +217,7 @@ def main():
     
     while True:
         try:
-            query = input("\nPlease ask a medical education-related question! \nWe have information on Allergies, Ear infections, Type 1 diabetes, Pneumonia, Influenza, the Common Cold, and many more.")
+            query = input("\nPlease ask a medical education-related question! \nWe have information on Allergies, Ear infections, Type 1 diabetes, Pneumonia, Influenza, the Common Cold, and many more.\n\n")
             if query.lower() == "exit":
                 break
             if not query.strip():
