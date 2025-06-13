@@ -12,7 +12,6 @@ from sentence_transformers import SentenceTransformer
 import torch
 import logging
 from llama_index.llms.ollama import Ollama
-from llama_index.core.llms import ChatMessages
 
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
