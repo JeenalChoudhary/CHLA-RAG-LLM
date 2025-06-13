@@ -2,10 +2,7 @@
 # import sys
 # sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
-import os
-import torch
 import streamlit as st
-from sentence_transformers import SentenceTransformer
 import backend_rag as main
 
 # ---- Configurations ----
@@ -24,7 +21,19 @@ if 'collection' not in st.session_state:
 # ---- Page Setup ----
 st.set_page_config(page_title="CHLA Health Education Chatbot", layout="wide")
 st.title("CHLA Health Education RAG Chatbot")
-st.markdown("Ask questions about family health education and get cited, document-grounded answers.")
+
+# ---- Caching Functions ----
+@st.cache_resource
+def get_embedding_model():
+    return main.get_embedding_model()
+
+@st.cache_data
+def load_docs(directory):
+    return main.load_and_process_pdfs(directory)
+
+@st.cache_resource
+def setup_db(_docs, _embedding_model):
+    return main.setup_chromadb(_docs, _embedding_model, rebuild=True)
 
 # ---- Sidebar ----
 st.sidebar.header("Database Configuration")
@@ -34,59 +43,43 @@ st.sidebar.info(
 )
 if st.sidebar.button("Initialize/Refresh Database", key="init_db"):
     with st.spinner("Initializing... This may take a moment!"):
-        # Load embedding model
-        st.write("Loading embedding model...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        st.session_state.embedding_model = SentenceTransformer(main.EMBEDDING_MODEL_NAME, device=device)
-        st.write("Embedding model loaded!")
-        
-        # Load & process PDFs as needed
-        st.write("Processing PDFs...")
-        documents = main.load_and_process_pdfs(main.PDF_DIRECTORY)
-        st.write("PDFs processed!")
-        
+        docs = load_docs(main.PDF_DIRECTORY)
         # Setup ChromaDB collection
-        if documents:
-            st.write("Setting up vector database...")
-            # Always rebuild when initializing from the UI
-            st.session_state.collection = main.setup_chromadb(documents, st.session_state.embedding_model, rebuild=True)
-            st.write("Database is ready.")
-            st.session_state.db_ready = True
-            st.sidebar.success("Database is ready!")
+        if docs:
+            embedding_model = get_embedding_model()
+            st.session_state.collection = setup_db(docs, embedding_model)
+            st.success("Database is ready for generation")
         else:
-            st.error("No documents found. Please check the 'docs' folder in your repository.")
-            st.session_state.db_ready = False
+            st.error(f"No documents found. Please check the {main.PDF_DIRECTORY} folder in your repository.")
 
-# Ensure database is initialized
-# if 'collection' not in st.session_state:
-#     with st.spinner("Initializing database..."):
-#         device = "cuda" if torch.cuda.is_available() else "cpu"
-#         st.session_state.embedding_model = SentenceTransformer(main.EMBEDDING_MODEL_NAME, device=device)
-#         documents = []
-#         db_exists = os.path.exists(main.DB_PATH) and len(os.listdir(main.DB_PATH)) > 0
-#         if not db_exists:
-#             documents = main.load_and_process_pdfs(main.PDF_DIRECTORY)
-#         st.session_state.collection = main.setup_chromadb(documents, st.session_state.embedding_model, rebuild=rebuild_db)
-#     st.success("Database initialized!")
+st.sidebar.info("Click the button above to load your PDF documents. This is required before querying the chatbot.")
+
 
 # ---- Query Interface ----
-if st.session_state.db_ready:
-    query = st.text_input("Enter your question about family health education:", key="query_input")
-    if st.button("Get Answer", key="get_answer"):
-        if not query:
-            st.warning("Please enter a question before submitting.")
-        else:
-            with st.spinner("Searching for relevant documents..."):
-                context, sources = main.retrieve_context(query, st.session_state.collection, st.session_state.embedding_model)
-            
-            with st.spinner("Contacting Ollama to generate answer..."):
-                # Display
-                answer = main.generate_answer(query, context, sources)
-            st.subheader("Answer")
-            st.write(answer)
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message['content'])
+    
+if prompt := st.chat_input("Ask a question relating to your health documents!"):
+    if "collection" not in st.session_state:
+        st.warning("Please initialize the database using the button on the sidebar before querying.")
+        st.stop()
+    
+    st.session_state.messages.append({"role":"user", "content":prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            embedding_model = get_embedding_model()
+            collection = st.session_state.collection
+            context, sources = main.retrieve_context(prompt, collection, embedding_model)
+            response_generator = main.generate_answer(prompt, context, "gemma3:latest")
+            full_response = st.write_stream(response_generator)
             if sources:
-                st.subheader("Sources")
-                for src in sources:
-                    st.markdown(f"- {src}")
-else:
-    st.info("Please initialize the database by using the button in the sidebar to begin.")
+                full_response += "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sources)
+                st.rerun()
+    st.session_state.messages.append({"role":"assistant", "content":full_response})

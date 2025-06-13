@@ -5,12 +5,14 @@ import os
 import re
 import fitz
 import chromadb
-import requests
-import json
-import argparse
+# import requests
+# import json
+# import argparse
 from sentence_transformers import SentenceTransformer
 import torch
 import logging
+from llama_index.llms.ollama import Ollama
+from llama_index.core.llms import ChatMessages
 
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,14 +21,13 @@ SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PDF_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "docs")
 DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
-
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
-OLLAMA_MODEL_NAME = "gemma3:latest"
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
+# OLLAMA_MODEL_NAME = "gemma3:latest"
+# OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
-CHUNK_SIZE = 768
-CHUNK_OVERLAP = 75
+CHUNK_SIZE = 1024
+CHUNK_OVERLAP = 100
 
 
 # ---- Text extraction and cleaning ----
@@ -86,6 +87,11 @@ def load_and_process_pdfs(directory):
 
 
 #---- Vector database setup ----
+def get_embedding_model():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logging.info(f"Loading embedding model '{EMBEDDING_MODEL_NAME}' on device '{device}'")
+    return SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
+
 def setup_chromadb(documents, embedding_model, rebuild=False):
     client = chromadb.PersistentClient(path=DB_PATH)
     
@@ -134,21 +140,14 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
 #---- Retrieval and Generation ----
 def retrieve_context(query, collection, embedding_model, n_results=5):
     logging.info(f"Retrieving context for query: '{query}'")
-    query_embedding = embedding_model.encode(query, convert_to_tensor=True).tolist()
-    
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=n_results
-    )
-    
+    query_embedding = embedding_model.encode(query).tolist()
+    results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
     context = "\n\n---\n\n".join(results['documents'][0])
     sources = sorted(list(set(meta['source'] for meta in results['metadatas'][0])))
     logging.info(f"Retrieved context from sources: {list(sources)}")
-    
     return context, sources
 
-def generate_answer(query, context, sources):
-    sources_text = "\n".join(f"- {source}" for source in sources)
+def generate_answer(query, context, model_name):
     prompt_template = f"""
     You are a helpful medical information assistant. 
     Your task is to answer the user's question based *only* on the provided context from Mayo Clinic documents. 
@@ -156,85 +155,70 @@ def generate_answer(query, context, sources):
     
     CONTEXT: {context}
     
-    SOURCES: {sources_text}
-    
     QUESTION: {query}
     
     ANSWER:
     """
-    logging.info("Sending prompt to Ollama LLM")
-    try:
-        payload = {
-            "model": OLLAMA_MODEL_NAME,
-            "prompt": prompt_template,
-            "stream": False   # For a single response object
-        }
-        response = requests.post(OLLAMA_API_URL, json=payload)
-        response.raise_for_status()  # Check if the request was successful or raise an exception
-        
-        response_data = response.json()
-        return response_data.get('response', "Error: Could not extract response from Ollama model").strip()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error communicating with Ollama: {e}")
-        return "Error: Could not connect to the Ollama server. Please ensure Ollama is running."
-    except json.JSONDecodeError:
-        logging.error(f"Failed to decode Ollama's response: {response.text}")
-        return "Error: Received an invalid response from Ollama"
+    logging.info(f"Sending prompt to Ollama model via LlamaIndex: {model_name}")
+    llm = Ollama(model=model_name, request_timeout=120.0, temperature=0)
+    response_iter = llm.stream_complete(prompt_template)
+    for token in response_iter:
+        yield token.delta
 
 
-#---- Main Execution Phase ----
+# #---- Main Execution Phase ----
 
-def main():
-    parser = argparse.ArgumentParser(description="A RAG chatbot for patient and family healthcare education")
-    parser.add_argument(
-        "--rebuild-db",
-        action="store_true",
-        help="Force the reprocessing of PDFs and rebuilding of the vector database."
-    )
-    args = parser.parse_args()
+# def main():
+#     parser = argparse.ArgumentParser(description="A RAG chatbot for patient and family healthcare education")
+#     parser.add_argument(
+#         "--rebuild-db",
+#         action="store_true",
+#         help="Force the reprocessing of PDFs and rebuilding of the vector database."
+#     )
+#     args = parser.parse_args()
     
-    try:
-        requests.get("http://localhost:11434")
-    except requests.exceptions.ConnectionError:
-        logging.error("Ollama server is not found. Please start Ollama and pull a model (e.g. 'ollama run llama-4-scout'.)")
-        return
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logging.info(f"Loading embedding model '{EMBEDDING_MODEL_NAME}' on device '{device}'")
-    embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
+#     try:
+#         requests.get("http://localhost:11434")
+#     except requests.exceptions.ConnectionError:
+#         logging.error("Ollama server is not found. Please start Ollama and pull a model (e.g. 'ollama run llama-4-scout'.)")
+#         return
+#     device = "cuda" if torch.cuda.is_available() else "cpu"
+#     logging.info(f"Loading embedding model '{EMBEDDING_MODEL_NAME}' on device '{device}'")
+#     embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
     
-    documents=[]
-    db_exists = os.path.exists(DB_PATH) and len(os.listdir(DB_PATH)) > 0
-    if args.rebuild_db or not db_exists:
-        documents = load_and_process_pdfs(PDF_DIRECTORY)
-        if not documents:
-            logging.error(f"No documents were found or processed from the {PDF_DIRECTORY} directory. Please check the directory, add your PDFs, and try again.")
-            return
+#     documents=[]
+#     db_exists = os.path.exists(DB_PATH) and len(os.listdir(DB_PATH)) > 0
+#     if args.rebuild_db or not db_exists:
+#         documents = load_and_process_pdfs(PDF_DIRECTORY)
+#         if not documents:
+#             logging.error(f"No documents were found or processed from the {PDF_DIRECTORY} directory. Please check the directory, add your PDFs, and try again.")
+#             return
     
-    collection = setup_chromadb(documents, embedding_model, rebuild=args.rebuild_db)
-    print(f"DEBUG: Found {collection.count()} documents in the ChromaDB collection.\n")
+#     collection = setup_chromadb(documents, embedding_model, rebuild=args.rebuild_db)
+#     print(f"DEBUG: Found {collection.count()} documents in the ChromaDB collection.\n")
     
-    print("\n--- Patient Health Education RAG Chatbot Demonstration ---")
-    print(f"LLM: {OLLAMA_MODEL_NAME} | Embedding: PubMedBERT | DB: ChromaDB")
-    print("Type exit to quit this application.")
+#     print("\n--- Patient Health Education RAG Chatbot Demonstration ---")
+#     print(f"LLM: {OLLAMA_MODEL_NAME} | Embedding: PubMedBERT | DB: ChromaDB")
+#     print("Type exit to quit this application.")
     
-    while True:
-        try:
-            query = input("\nPlease ask a medical education-related question! \nWe have information on Allergies, Ear infections, Type 1 diabetes, Pneumonia, Influenza, the Common Cold, and many more.\n\n")
-            if query.lower() == "exit":
-                break
-            if not query.strip():
-                continue
+#     while True:
+#         try:
+#             query = input("\nPlease ask a medical education-related question! \nWe have information on Allergies, Ear infections, Type 1 diabetes, Pneumonia, Influenza, the Common Cold, and many more.\n\n")
+#             if query.lower() == "exit":
+#                 break
+#             if not query.strip():
+#                 continue
             
-            context, sources = retrieve_context(query, collection, embedding_model)
-            answer = generate_answer(query, context, sources)
+#             context, sources = retrieve_context(query, collection, embedding_model)
+#             answer = generate_answer(query, context, sources)
             
-            print("\nAnswer:")
-            print(answer)
-        except KeyboardInterrupt:
-            print("Exiting...")
-            break
-        except Exception as e:
-            logging.error(f"An unexpected error occurred: {e}")
+#             print("\nAnswer:")
+#             print(answer)
+#         except KeyboardInterrupt:
+#             print("Exiting...")
+#             break
+#         except Exception as e:
+#             logging.error(f"An unexpected error occurred: {e}")
             
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
