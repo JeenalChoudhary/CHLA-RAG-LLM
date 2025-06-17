@@ -15,7 +15,7 @@ if 'collection' not in st.session_state:
 
 # ---- Page Setup ----
 st.set_page_config(page_title="CHLA Health Education Chatbot", layout="wide")
-st.title("CHLA Health Education RAG Chatbot")
+st.title("CHLA's Family Health Education Chatbot")
 
 # ---- Caching Functions ----
 @st.cache_resource
@@ -35,10 +35,10 @@ st.sidebar.header("Database Configuration")
 if st.sidebar.button("Initialize/Refresh Database", key="init_db"):
     with st.spinner("Initializing... This may take a moment!"):
         docs = load_docs(main.PDF_DIRECTORY)
-        # Setup ChromaDB collection
         if docs:
             embedding_model = get_embedding_model()
             st.session_state.collection = setup_db(docs, embedding_model)
+            st.session_state.db_ready = True
             st.success("Database is ready for generation")
         else:
             st.error(f"No documents found. Please check the {main.PDF_DIRECTORY} folder in your repository.")
@@ -54,7 +54,7 @@ for message in st.session_state.messages:
         st.markdown(message['content'])
     
 if prompt := st.chat_input("Ask a question relating to your health documents!"):
-    if "collection" not in st.session_state:
+    if "collection" not in st.session_state or not st.session_state.db_ready:
         st.warning("Please initialize the database using the button on the sidebar before querying.")
         st.stop()
     
@@ -63,13 +63,19 @@ if prompt := st.chat_input("Ask a question relating to your health documents!"):
         st.markdown(prompt)
     
     with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        full_response = ""
         with st.spinner("Thinking..."):
             embedding_model = get_embedding_model()
             collection = st.session_state.collection
             context, sources = main.retrieve_context(prompt, collection, embedding_model)
             response_generator = main.generate_answer(prompt, context, "gemma3:latest")
-            full_response = st.write_stream(response_generator)
-            if sources:
-                full_response += "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sources)
-                st.rerun()
+            
+            for chunk in response_generator:
+                full_response += chunk
+                message_placeholder.markdown(full_response + "▌")
+        if sources:
+            source_text = "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sorted(list(set(sources))))
+            full_response += source_text
+        message_placeholder.markdown(full_response)
     st.session_state.messages.append({"role":"assistant", "content":full_response})
