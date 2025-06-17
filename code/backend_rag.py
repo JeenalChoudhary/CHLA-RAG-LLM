@@ -19,8 +19,8 @@ DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 50
+CHUNK_SIZE = 256
+CHUNK_OVERLAP = 30
 
 
 # ---- Text extraction and cleaning ----
