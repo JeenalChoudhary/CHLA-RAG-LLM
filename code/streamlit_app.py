@@ -37,10 +37,6 @@ def setup_db(_docs, _embedding_model):
 
 # ---- Sidebar ----
 st.sidebar.header("Database Configuration")
-st.sidebar.info(
-    "Click the button below to load the model and prepare the document database. "
-    "This may take a few minutes on the first run."
-)
 if st.sidebar.button("Initialize/Refresh Database", key="init_db"):
     with st.spinner("Initializing... This may take a moment!"):
         docs = load_docs(main.PDF_DIRECTORY)
