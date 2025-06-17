@@ -5,9 +5,6 @@ import os
 import re
 import fitz
 import chromadb
-# import requests
-# import json
-# import argparse
 from sentence_transformers import SentenceTransformer
 import torch
 import logging
@@ -21,9 +18,6 @@ PDF_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "docs")
 DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
-
-# OLLAMA_MODEL_NAME = "gemma3:latest"
-# OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
 CHUNK_SIZE = 1024
 CHUNK_OVERLAP = 100
@@ -163,61 +157,3 @@ def generate_answer(query, context, model_name):
     response_iter = llm.stream_complete(prompt_template)
     for token in response_iter:
         yield token.delta
-
-
-# #---- Main Execution Phase ----
-
-# def main():
-#     parser = argparse.ArgumentParser(description="A RAG chatbot for patient and family healthcare education")
-#     parser.add_argument(
-#         "--rebuild-db",
-#         action="store_true",
-#         help="Force the reprocessing of PDFs and rebuilding of the vector database."
-#     )
-#     args = parser.parse_args()
-    
-#     try:
-#         requests.get("http://localhost:11434")
-#     except requests.exceptions.ConnectionError:
-#         logging.error("Ollama server is not found. Please start Ollama and pull a model (e.g. 'ollama run llama-4-scout'.)")
-#         return
-#     device = "cuda" if torch.cuda.is_available() else "cpu"
-#     logging.info(f"Loading embedding model '{EMBEDDING_MODEL_NAME}' on device '{device}'")
-#     embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME, device=device)
-    
-#     documents=[]
-#     db_exists = os.path.exists(DB_PATH) and len(os.listdir(DB_PATH)) > 0
-#     if args.rebuild_db or not db_exists:
-#         documents = load_and_process_pdfs(PDF_DIRECTORY)
-#         if not documents:
-#             logging.error(f"No documents were found or processed from the {PDF_DIRECTORY} directory. Please check the directory, add your PDFs, and try again.")
-#             return
-    
-#     collection = setup_chromadb(documents, embedding_model, rebuild=args.rebuild_db)
-#     print(f"DEBUG: Found {collection.count()} documents in the ChromaDB collection.\n")
-    
-#     print("\n--- Patient Health Education RAG Chatbot Demonstration ---")
-#     print(f"LLM: {OLLAMA_MODEL_NAME} | Embedding: PubMedBERT | DB: ChromaDB")
-#     print("Type exit to quit this application.")
-    
-#     while True:
-#         try:
-#             query = input("\nPlease ask a medical education-related question! \nWe have information on Allergies, Ear infections, Type 1 diabetes, Pneumonia, Influenza, the Common Cold, and many more.\n\n")
-#             if query.lower() == "exit":
-#                 break
-#             if not query.strip():
-#                 continue
-            
-#             context, sources = retrieve_context(query, collection, embedding_model)
-#             answer = generate_answer(query, context, sources)
-            
-#             print("\nAnswer:")
-#             print(answer)
-#         except KeyboardInterrupt:
-#             print("Exiting...")
-#             break
-#         except Exception as e:
-#             logging.error(f"An unexpected error occurred: {e}")
-            
-# if __name__ == "__main__":
-#     main()

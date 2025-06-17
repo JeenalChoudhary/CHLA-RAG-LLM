@@ -6,11 +6,6 @@ import streamlit as st
 import backend_rag as main
 
 # ---- Configurations ----
-
-# EMBEDDING_MODEL_NAME = main.EMBEDDING_MODEL_NAME
-# DB_PATH = main.DB_PATH
-# PDF_DIRECTORY = main.PDF_DIRECTORY
-
 if 'db_ready' not in st.session_state:
     st.session_state.db_ready = False
 if 'embedding_model' not in st.session_state:
@@ -49,7 +44,6 @@ if st.sidebar.button("Initialize/Refresh Database", key="init_db"):
             st.error(f"No documents found. Please check the {main.PDF_DIRECTORY} folder in your repository.")
 
 st.sidebar.info("Click the button above to load your PDF documents. This is required before querying the chatbot.")
-
 
 # ---- Query Interface ----
 if "messages" not in st.session_state:
