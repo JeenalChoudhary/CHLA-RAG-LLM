@@ -19,8 +19,8 @@ DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
-CHUNK_SIZE = 1024
-CHUNK_OVERLAP = 100
+CHUNK_SIZE = 512
+CHUNK_OVERLAP = 50
 
 
 # ---- Text extraction and cleaning ----
@@ -131,7 +131,7 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
 
 
 #---- Retrieval and Generation ----
-def retrieve_context(query, collection, embedding_model, n_results=5):
+def retrieve_context(query, collection, embedding_model, n_results=2):
     logging.info(f"Retrieving context for query: '{query}'")
     query_embedding = embedding_model.encode(query).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
