@@ -6,4 +6,5 @@ sentence_transformers
 chromadb
 requests
 pysqlite3-binary
+llama-index-llms-ollama
 protobuf==3.20.3
