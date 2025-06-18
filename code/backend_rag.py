@@ -1,6 +1,6 @@
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+# __import__('pysqlite3')
+# import sys
+# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import os
 import re
 import fitz
@@ -9,6 +9,7 @@ from sentence_transformers import SentenceTransformer
 import torch
 import logging
 from llama_index.llms.ollama import Ollama
+import nltk
 
 # ---- Configuration and Constraints ----
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,10 +20,19 @@ DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
+SENTENCES_PER_CHUNK = 4
+BROAD_TERMS = ['diabetes', 'asthma', 'cancer', 'influenza', 'headache', 'rash'] # For query expansion
 CHUNK_SIZE = 256
 CHUNK_OVERLAP = 30
 
-
+# ---- Setup NLTK ----
+try:
+    nltk.data.find('tokenizer/punkt')
+except nltk.downloader.DownloadError:
+    logging.info("Downloading NLTK 'punkt' model...")
+    nltk.download('punkt')
+    logging.info("NLTK 'punkt' model downloaded successfully.")
+    
 # ---- Text extraction and cleaning ----
 def clean_pdf_text(text):
     text = re.sub(r'MAYO\s*CLINIC.*(?:\n.*)*?(?:Request an Appointment|Log in|Symptoms &|causes|Diagnosis &|treatment|Doctors &|departments)', '', text, flags=re.IGNORECASE)
