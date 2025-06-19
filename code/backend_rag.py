@@ -20,7 +20,7 @@ DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
-SENTENCES_PER_CHUNK = 4
+SENTENCES_PER_CHUNK = 6
 BROAD_TERMS = ['Leukemia', 'Acute Lymphocytic Leukemia (ALL)', 'Acute Myeloid Leukemia (AML)',
                'Asthma', 'Abdominal Aortic Aneurysm', 'ACL Injury', 'Strabismus',
                'Peripheral Arterial Disease (PAD)', 'Abdominal Pain', 'Acoustic Neuroma',
@@ -85,7 +85,7 @@ def load_and_process_pdfs(directory):
                         "metadata":{
                             "source": filename,
                             "language": "english",
-                            "category": None
+                            "category": "None"
                         }
                     })
             except Exception as e:
@@ -124,7 +124,7 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
         metadatas = [doc['metadata'] for doc in documents]
         ids = [f"doc_{i}" for i in range(len(documents))]
         
-        batch_size = 32
+        batch_size = 120
         all_embeddings = []
         for i in range(0, len(contents), batch_size):
             batch = contents[i:i + batch_size]
