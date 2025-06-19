@@ -6,6 +6,10 @@ sentence_transformers
 chromadb
 requests
 pysqlite3-binary
-llama-index-llms-ollama
 nltk
 protobuf==3.20.3
+llama-index-core
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+llama-index-vector-stores-chroma
+llama-index-readers-file
