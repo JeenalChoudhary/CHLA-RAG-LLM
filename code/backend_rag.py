@@ -21,9 +21,12 @@ COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 
 SENTENCES_PER_CHUNK = 4
-BROAD_TERMS = ['diabetes', 'asthma', 'cancer', 'influenza', 'headache', 'rash'] # For query expansion
-CHUNK_SIZE = 256
-CHUNK_OVERLAP = 30
+BROAD_TERMS = ['Leukemia', 'Acute Lymphocytic Leukemia (ALL)', 'Acute Myeloid Leukemia (AML)',
+               'Asthma', 'Abdominal Aortic Aneurysm', 'ACL Injury', 'Strabismus',
+               'Peripheral Arterial Disease (PAD)', 'Abdominal Pain', 'Acoustic Neuroma',
+               'Acute Bronchitis', 'Acute Liver Failure', 'Abscess'] # For query expansion
+# CHUNK_SIZE = 256
+# CHUNK_OVERLAP = 30
 
 # ---- Setup NLTK ----
 try:
@@ -68,19 +71,21 @@ def load_and_process_pdfs(directory):
         if filename.lower().endswith(".pdf"):
             path = os.path.join(directory, filename)
             logging.info(f"Processing PDF: {filename}")
-            
             try:
                 doc = fitz.open(path)
                 full_text = ""
                 for page in doc:
                     full_text += page.get_text()
                 cleaned_text = clean_pdf_text(full_text)
-                for i in range(0, len(cleaned_text), CHUNK_SIZE - CHUNK_OVERLAP):
-                    chunk = cleaned_text[i:i + CHUNK_SIZE]
+                sentences = nltk.sent_tokenize(cleaned_text)
+                for i in range(0, len(cleaned_text), SENTENCES_PER_CHUNK):
+                    chunk = cleaned_text[i:i + SENTENCES_PER_CHUNK]
                     documents.append({
                         "content":chunk,
                         "metadata":{
-                            "source":filename
+                            "source": filename,
+                            "language": "english",
+                            "category": None
                         }
                     })
             except Exception as e:
@@ -101,7 +106,7 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
     if rebuild:
         try:
             if COLLECTION_NAME in [c.name for c in client.list_collections()]:
-                logging.info(f'Rebuilding DB... Delecting existing collection {COLLECTION_NAME}')
+                logging.info(f'Rebuilding DB... Deleting existing collection {COLLECTION_NAME}')
                 client.delete_collection(name=COLLECTION_NAME)
         except Exception as e:
             logging.error(f"Error in deleting collection: {e}")
@@ -167,3 +172,33 @@ def generate_answer(query, context, model_name):
     response_iter = llm.stream_complete(prompt_template)
     for token in response_iter:
         yield token.delta
+        
+def generate_query_expansion_options(query, model_name="gemma3:1b"):
+    if not any(term in query.lower() for term in BROAD_TERMS):
+        return []
+    
+    prompt = f"""
+    A user has provided the following health-related query: {query}
+    This is too broad. Your task is to generate 3-4 clarifying questions to help them narrow down their search.
+    These questions should be presented as distinct, actionable options.
+    For example, for "diabetes", you could suggest "What are the symptoms of diabetes?" or "How is diabetes treated?".
+    Return ONLY a Python-parseable list of strings. Do not include any other text or explanation.
+    
+    Example format:
+    ["What are the symptoms of {query}", "What are the treatment options for {query}", "What are the risk factors for {query}"]
+    """
+    try:
+        logging.info(f"Generating query expansion options for '{query}' using {model_name}")
+        llm = Ollama(model=model_name, request_timeout=120.0, temperature=0)
+        response = llm.complete(prompt)
+        match = re.search(r'\[\s*".*?"\s*(,\s*".*?"\s*)*\]', response)
+        if match:
+            options = eval(match.group(0))
+            logging.info(f"Generated options: {options}")
+            return options
+        else:
+            logging.warning("Could not parse the query expansion options from LLM response.")
+            return []
+    except Exception as e:
+        logging.error(f"Error during query expansion: {e}")
+        return []

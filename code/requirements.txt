@@ -7,4 +7,5 @@ chromadb
 requests
 pysqlite3-binary
 llama-index-llms-ollama
+nltk
 protobuf==3.20.3
