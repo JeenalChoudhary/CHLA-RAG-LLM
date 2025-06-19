@@ -31,7 +31,7 @@ BROAD_TERMS = ['Leukemia', 'Acute Lymphocytic Leukemia (ALL)', 'Acute Myeloid Le
 # ---- Setup NLTK ----
 try:
     nltk.data.find('tokenizer/punkt')
-except nltk.downloader.DownloadError:
+except LookupError:
     logging.info("Downloading NLTK 'punkt' model...")
     nltk.download('punkt')
     logging.info("NLTK 'punkt' model downloaded successfully.")
