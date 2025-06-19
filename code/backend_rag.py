@@ -78,8 +78,8 @@ def load_and_process_pdfs(directory):
                     full_text += page.get_text()
                 cleaned_text = clean_pdf_text(full_text)
                 sentences = nltk.sent_tokenize(cleaned_text)
-                for i in range(0, len(cleaned_text), SENTENCES_PER_CHUNK):
-                    chunk = cleaned_text[i:i + SENTENCES_PER_CHUNK]
+                for i in range(0, len(sentences), SENTENCES_PER_CHUNK):
+                    chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
                     documents.append({
                         "content":chunk,
                         "metadata":{
@@ -119,26 +119,26 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
         if not documents:
             logging.warning(f"There are 0 documents to populate the database with. Please check you have added documents to the {PDF_DIRECTORY} directory.")
             return collection
+        
         logging.info(f"Database is empty or rebuild is forced. Populating with new data...")
-        contents = [doc['content'] for doc in documents]
-        metadatas = [doc['metadata'] for doc in documents]
-        ids = [f"doc_{i}" for i in range(len(documents))]
+        batch_size = 4096
         
-        batch_size = 120
-        all_embeddings = []
-        for i in range(0, len(contents), batch_size):
-            batch = contents[i:i + batch_size]
-            embeddings = embedding_model.encode(batch, convert_to_tensor=True).tolist()
-            all_embeddings.extend(embeddings)
-            logging.info(f"Embedded batch {i//batch_size+1}/{(len(contents) + batch_size - 1)//batch_size}")
+        # all_embeddings = []
+        for i in range(0, len(documents), batch_size):
+            document_batch = documents[i:i + batch_size]
+            contents_batch = [doc['content'] for doc in document_batch]
+            metadata_batch = [doc['metadata'] for doc in document_batch]
+            id_batch = [f"doc_{i}" for i in range(len(document_batch))]
+            embeddings_batch = embedding_model.encode(contents_batch).tolist()
         
-        collection.add(
-            embeddings=all_embeddings,
-            documents=contents,
-            metadatas=metadatas,
-            ids=ids
-        )
-        logging.info(f"Successfully added {len(documents)} chunks to ChromaDB")
+            collection.add(
+                embeddings=embeddings_batch,
+                documents=contents_batch,
+                metadatas=metadata_batch,
+                ids=id_batch
+            )
+            logging.info(f"Added batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size} to ChromaDB.")
+        logging.info(f"Successfully added {len(documents)} documents to ChromaDB.")
     else:
         logging.info("Existing documents found and loaded")
     
