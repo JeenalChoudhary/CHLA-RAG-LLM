@@ -9,12 +9,12 @@ import backend_rag as main
 def initialize_app():
     if 'db_ready' not in st.session_state:
         st.session_state.db_ready = False
-    if 'embedding_model' not in st.session_state:
-        st.session_state.embedding_model = None
+    if 'documents' not in st.session_state:
+        st.session_state.documents = []
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
     if 'collection' not in st.session_state:
         st.session_state.collection = None
-    if 'clarification_options' not in st.session_state:
-        st.session_state.clarification_options = []
     
     if not st.session_state.db_ready:
         with st.spinner("Preparing the Health Education Navigator... This may take a few moments for initial startup!"):
