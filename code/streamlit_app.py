@@ -2,111 +2,92 @@
 # import sys
 # sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
+import time
 import backend_rag as main
 
-# ---- Configurations ----
-if 'db_ready' not in st.session_state:
-    st.session_state.db_ready = False
-if 'embedding_model' not in st.session_state:
-    st.session_state.embedding_model = None
-if 'collection' not in st.session_state:
-    st.session_state.collection = None
-if 'clarification_options' not in st.session_state:
-    st.session_state.clarification_options = []
 
+def initialize_app():
+    if 'db_ready' not in st.session_state:
+        st.session_state.db_ready = False
+    if 'embedding_model' not in st.session_state:
+        st.session_state.embedding_model = None
+    if 'collection' not in st.session_state:
+        st.session_state.collection = None
+    if 'clarification_options' not in st.session_state:
+        st.session_state.clarification_options = []
+    
+    if not st.session_state.db_ready:
+        with st.spinner("Preparing the Health Education Navigator... This may take a few moments for initial startup!"):
+            st.session_state.documents = main.load_and_process_pdfs(main.PDF_DIRECTORY)
+            if st.session_state.documents:
+                embedding_model = main.get_embedding_model()
+                st.session_state.collection = main.setup_chromadb(st.session_state.documents, embedding_model, rebuild=True)
+                st.session_state.db_ready = True
+                st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo see what I know about, just ask me: **'What can you teach me?'**"})
+            else:
+                st.error(f"No PDF Documents found in the '{main.PDF_DIRECTORY}' folder. Please check your repository and add your PDF documents.")
+
+initialize_app()
 # ---- Page Setup ----
-st.set_page_config(page_title="CHLA Health Education Chatbot", layout="wide")
-st.title("CHLA's Family Health Education Chatbot")
-
-# ---- Caching Functions ----
-@st.cache_resource
-def get_embedding_model():
-    return main.get_embedding_model()
-
-@st.cache_data
-def load_docs(directory):
-    return main.load_and_process_pdfs(directory)
-
-@st.cache_resource
-def setup_db(_docs, _embedding_model):
-    return main.setup_chromadb(_docs, _embedding_model, rebuild=True)
-
-# ---- Sidebar ----
-st.sidebar.header("Database Configuration")
-if st.sidebar.button("Initialize/Refresh Database", key="init_db"):
-    with st.spinner("Initializing... This may take a moment!"):
-        docs = load_docs(main.PDF_DIRECTORY)
-        if docs:
-            embedding_model = get_embedding_model()
-            st.session_state.collection = setup_db(docs, embedding_model)
-            st.session_state.db_ready = True
-            st.success("Database is ready for generation")
-        else:
-            st.error(f"No documents found. Please check the {main.PDF_DIRECTORY} folder in your repository.")
-st.sidebar.info("Click the button above to load your PDF documents. This is required before querying the chatbot.")
-
-# ---- Query Interface ----
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.sidebar.header("Status")
+if st.session_state.db_ready:
+    st.sidebar.success("Database is ready.")
+    st.sidebar.info(f"{len(st.session_state.documents)} document chunks loaded into database.")
+else:
+    st.sidebar.warning("Database is not initialized. Please check logs for more information.")
 
 for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
+    with st.chat_message(message['role']):
         st.markdown(message['content'])
 
-def handle_query(prompt):
-    st.session_state.messages.append({"role":"user", "content":prompt})
+def handle_user_query(prompt):
+    st.session_state.messages.append({'role':'user', 'content':prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
+    
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
+        
         with st.spinner("Thinking..."):
-            embedding_model = get_embedding_model()
-            collection = st.session_state.collection
-            generation_model = "gemma3:latest"
-            context, sources = main.retrieve_context(prompt, collection, embedding_model)
-            response_generator = main.generate_answer(prompt, context, generation_model)
+            response_generator, sources = main.handle_query(
+                prompt,
+                st.session_state.collection,
+                main.get_embedding_model(),
+                st.session_state.documents,
+                model_name="gemma3:latest"
+            )
+            
             for chunk in response_generator:
                 full_response += chunk
                 message_placeholder.markdown(full_response + "▌")
+                time.sleep(0.005)
+                
         if sources:
-            source_text = "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sorted(list(set(sources))))
+            cleaned_sources = [s.replace('_', ' ').replace('.pdf', '') for s in sorted(list(set(sources)))]
+            source_text = "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in cleaned_sources)
             full_response += source_text
+            
         message_placeholder.markdown(full_response)
-    st.session_state.messages.append({"role":"assistant", "content":full_response})
+    st.session_state.messages.append({'role':'assistant', 'content':full_response})
 
-if prompt := st.chat_input("Ask a question relating to your health documents!"):
-    if not st.session_state.db_ready:
-        st.warning("Please initialize the database using the button on the sidebar before querying.")
-        st.stop()
+if prompt := st.chat_input("Ask a question about a health topic..."):
+    if main.SPECIAL_QUERY_TRIGGER in prompt.lower():
+        handle_user_query(prompt)
     else:
-        expansion_model = "gemma3:1b"
-        options = main.generate_query_expansion_options(prompt, expansion_model)
-        
+        options = main.generate_query_expansion_options(prompt, model_name="gemma3:1b")
         if options:
-            st.session_state.messages.append({"role":"user", "content":prompt})
+            st.session_state.messages.append({'role':'user', 'content':prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
-            
-            st.session_state.clarification_options = options
             clarification_text = "That is a great question! To give you the most relevant information, could you please specify what you are looking for?"
-            st.session_state.messages.append({"role":"assistant", "content":clarification_text})
+            st.session_state.messages.append({"role": "assistant", "content": clarification_text})
             
-            with st.chat_messages("assistant"):
+            with st.chat_message("assistant"):
                 st.markdown(clarification_text)
-                cols = st.columns(len(options))
-                for i, option in enumerate(options):
-                    if cols[i].button(option, key=f"option_{i}"):
-                        st.session_state.clarification_options = []
-                        handle_query(option)
+                for option in options:
+                    if st.button(option, key=f"option_{option}"):
+                        handle_user_query(option)
                         st.rerun()
         else:
-            handle_query(prompt)
-
-if st.session_state.clarification_options:
-    options = st.session_state.clarification_options
-    cols = st.columns(len(options))
-    for i, option in enumerate(options):
-        st.session_state.clarification_options = []
-        handle_query(option)
-        st.rerun()
+            handle_user_query(prompt)
