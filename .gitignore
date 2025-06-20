@@ -1,0 +1,19 @@
+# .gitignore
+.env
+*.env
+
+__pycache__/
+*.pyc
+*.pyo
+*pyd
+
+venv/
+env/
+virtual/
+.venv/
+
+.idea/
+.vscode/
+*.swp
+
+db/
