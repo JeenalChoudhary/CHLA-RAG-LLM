@@ -8,6 +8,9 @@ requests
 pysqlite3-binary
 nltk
 python-dotenv
+azure-functions
+msgraph-sdk
+azure-identity
 protobuf==3.20.3
 llama-index-core
 llama-index-llms-ollama
