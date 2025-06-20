@@ -1,3 +1,4 @@
+pip
 streamlit
 PyMuPDF
 numpy<2.0

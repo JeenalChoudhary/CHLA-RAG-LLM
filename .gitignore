@@ -17,3 +17,4 @@ virtual/
 *.swp
 
 db/
+.python_packages
