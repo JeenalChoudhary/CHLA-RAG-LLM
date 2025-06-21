@@ -6,7 +6,6 @@ torch
 sentence_transformers
 chromadb
 requests
-pysqlite3-binary
 nltk
 python-dotenv
 azure-functions
