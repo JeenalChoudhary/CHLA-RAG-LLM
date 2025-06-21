@@ -15,7 +15,7 @@ TENANT_ID = os.environ.get("AZURE_TENANT_ID")
 CLIENT_ID = os.environ.get("AZURE_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("AZURE_CLIENT_SECRET")
 
-output_dir = "docs"
+output_dir = "code/docs"
 os.makedirs(output_dir, exist_ok=True)
 
 async def main(mytimer):
@@ -42,30 +42,35 @@ async def main(mytimer):
         if not drive or not drive.id:
             logging.error("Could not find the default document library for the site.")
             return
+        print(f"Successfully found the default drive '{drive.name}' with ID: {drive.id}")
         logging.info(f"Successfully found the default drive '{drive.name}' with ID: {drive.id}")
         
         # 3. List the items and find the first file
+        print(f"Listing items in the root of the '{drive.name}' library...")
         logging.info(f"Listing items in the root of the '{drive.name}' library...")
         children = await graph_client.drives.by_drive_id(drive.id).root.children.get()
         
         if children and children.value:
             for item in children.value:
                 if item.file:
+                    print(f"Found a file: '{item.name}'")
                     logging.info(f"Found a file: '{item.name}")
                     download_url = item.additional_data.get('@microsoft.graph.downloadUrl')
                     if download_url:
+                        print(f"Downloading '{item.name}' from {download_url}")
                         logging.info(f"Downloading '{item.name} from {download_url}")
                         response = requests.get(download_url)
                         response.raise_for_status()
                         file_path = os.path.join(output_dir, item.name)
                         with open(file_path, "wb") as f:
                             f.write(response.content)
+                            print(f"Saved '{item.name}' to {file_path}")
                         logging.info(f"Successfully saved '{item.name}' to your computer.")
                         break
         else:
-            logging.info("No items found in the root of the document library.")
+            print("No items found in the root of the document library.")
             
-        logging.info("Download test completed successfully.")
+        print("Download test completed successfully.")
     except Exception as e:
         logging.error(f"An error occurred during the Graph API call: {e}", exc_info=True)
 
