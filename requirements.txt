@@ -2,6 +2,7 @@ streamlit
 PyMuPDF
 numpy<2.0
 torch
+requests
 sentence_transformers
 chromadb
 requests
