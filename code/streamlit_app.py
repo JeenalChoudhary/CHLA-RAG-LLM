@@ -1,10 +1,6 @@
-# __import__('pysqlite3')
-# import sys
-# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
 import time
 import backend_rag as main
-
 
 def initialize_app():
     if 'db_ready' not in st.session_state:
@@ -15,7 +11,6 @@ def initialize_app():
         st.session_state.messages = []
     if 'collection' not in st.session_state:
         st.session_state.collection = None
-    
     if not st.session_state.db_ready:
         with st.spinner("Preparing the Health Education Navigator... This may take a few moments for initial startup!"):
             st.session_state.documents = main.load_and_process_pdfs(main.PDF_DIRECTORY)
@@ -35,7 +30,6 @@ if st.session_state.db_ready:
     st.sidebar.info(f"{len(st.session_state.documents)} document chunks loaded into database.")
 else:
     st.sidebar.warning("Database is not initialized. Please check logs for more information.")
-
 for message in st.session_state.messages:
     with st.chat_message(message['role']):
         st.markdown(message['content'])
@@ -44,11 +38,9 @@ def handle_user_query(prompt):
     st.session_state.messages.append({'role':'user', 'content':prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
-    
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
-        
         with st.spinner("Thinking..."):
             response_generator, sources = main.handle_query(
                 prompt,
@@ -57,17 +49,14 @@ def handle_user_query(prompt):
                 st.session_state.documents,
                 model_name="gemma3:latest"
             )
-            
             for chunk in response_generator:
                 full_response += chunk
                 message_placeholder.markdown(full_response + "▌")
                 time.sleep(0.005)
-                
         if sources:
             cleaned_sources = [s.replace('_', ' ').replace('.pdf', '') for s in sorted(list(set(sources)))]
             source_text = "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in cleaned_sources)
             full_response += source_text
-            
         message_placeholder.markdown(full_response)
     st.session_state.messages.append({'role':'assistant', 'content':full_response})
 
@@ -82,7 +71,6 @@ if prompt := st.chat_input("Ask a question about a health topic..."):
                 st.markdown(prompt)
             clarification_text = "That is a great question! To give you the most relevant information, could you please specify what you are looking for?"
             st.session_state.messages.append({"role": "assistant", "content": clarification_text})
-            
             with st.chat_message("assistant"):
                 st.markdown(clarification_text)
                 for option in options:
