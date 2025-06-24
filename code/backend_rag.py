@@ -23,6 +23,7 @@ EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 SPECIAL_QUERY_TRIGGER = "what can you teach me?"
 
 SENTENCES_PER_CHUNK = 6
+STRIDE = 3
 BROAD_TERMS = ["Diagnosis", "Screening", "Blood Test", "MRI", "CT Scan", "Biopsy Results", "Lab Results", "Symptoms", "Causes", "Complications", "Risks",
                "Prevention", "Risk Factors", "Treatment Options", "Chemotherapy", "Radiation Therapy", "Targeted Therapy", "Stem Cell Transplant", "Surgery",
                "Procedures", "Medication", "Drugs", "Coping", "Support", "Short-term Side Effects", "Long-term Side Effects", "Recovery", "Follow-up",
@@ -104,16 +105,29 @@ def load_and_process_pdfs(directory):
                     full_text += page.get_text()
                 cleaned_text = clean_pdf_text(full_text)
                 sentences = nltk.sent_tokenize(cleaned_text)
-                for i in range(0, len(sentences), SENTENCES_PER_CHUNK):
+                documents = []
+                for i in range(0, len(sentences) - SENTENCES_PER_CHUNK + 1, STRIDE):
                     chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
                     documents.append({
                         "content":chunk,
                         "metadata":{
                             "source": filename,
                             "language": "english",
-                            "category": "None"
+                            "start_sentence_index": i
                         }
                     })
+                if (len(sentences) % STRIDE != 0) and (len(sentences) > SENTENCES_PER_CHUNK):
+                    last_chunk_start = len(sentences) - SENTENCES_PER_CHUNK
+                    if last_chunk_start > (len(documents)-1)*STRIDE:
+                        chunk = " ".join(sentences[last_chunk_start:])
+                        documents.append({
+                        "content":chunk,
+                        "metadata":{
+                            "source": filename,
+                            "language": "english",
+                            "start_sentence_index": last_chunk_start
+                            }
+                        })
             except Exception as e:
                 logging.error(f"Failed to process {filename}: {e}")
     logging.info(f"Successfully processed {len(os.listdir(directory))} PDFs into {len(documents)} chunks.")
