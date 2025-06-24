@@ -87,6 +87,7 @@ def clean_pdf_text(text):
     combined_pattern = re.compile(r"^\s*(" + "|".join(unwanted_patterns) + r")\s*$", flags=re.IGNORECASE)
     cleaned_lines = [line for line in lines if not combined_pattern.match(line.strip())]
     return '\n'.join(cleaned_lines).strip()
+    # return text
     
 def load_and_process_pdfs(directory):
     documents = []
@@ -105,7 +106,6 @@ def load_and_process_pdfs(directory):
                     full_text += page.get_text()
                 cleaned_text = clean_pdf_text(full_text)
                 sentences = nltk.sent_tokenize(cleaned_text)
-                documents = []
                 for i in range(0, len(sentences) - SENTENCES_PER_CHUNK + 1, STRIDE):
                     chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
                     documents.append({

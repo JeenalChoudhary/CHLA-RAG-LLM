@@ -1,44 +1,73 @@
-- **Cancer Therapies**
-    - Types of Complementary Cancer Therapy
-    - Acute Lymphocytic Leukemia (ALL) Treatment Choices
-    - Acute Myeloid Leukemia (AML) Treatment Options
-    - Acute Lymphocytic Leukemia(ALL) Chemotherapy
-    - Acute Myeloid Leukemia (AML) Chemotherapy
+Here's a concise, user-friendly, and organized list of the health topics covered in the provided document titles:
 
-- **Hematology & Oncology**
-    - Acute Lymphocytic Leukemia (ALL) Diagnosis
-    - Acute Lymphocytic Leukemia (ALL) Newly Diagnosed
-    - Acute Lymphocytic Leukemia (ALL) Overview
-    - Acute Lymphocytic Leukemia (ALL) Radiation Therapy
-    - Acute Lymphocytic Leukemia Targeted Therapy
-    - Acute Lymphocytic Leukemia(ALL) Stem Cell Transplant
-    - Acute Lymphocytic Leukemia(ALL) Tests After Diagnosis
-    - Acute Myeloid Leukemia (AML) Diagnosis
-    - Acute Myeloid Leukemia (AML) Newly Diagnosed
-    - Acute Myeloid Leukemia (AML) Status After Treatment
-    - Acute Myeloid Leukemia (AML) Tests After Diagnosis
+**1. Cancer & Oncology:**
+   - Acute Lymphocytic Leukemia (ALL) – Diagnosis, Treatment, Overview, Chemotherapy, Stem Cell Transplant, Radiation Therapy, Targeted Therapy, Testing
+   - Bladder Cancer – Chemotherapy, Diagnosis, Immunotherapy, Risk Factors, Stages, Treatment Choices
+   - Colorectal Cancer – Chemotherapy, Diagnosis, Prevention, Surgery, Targeted Therapy, Testing
+   - Cancer Clinical Trials
+   - Cancer Overview, Risk Factors, Prevention
 
-- **Cardiovascular Health**
-    - Abdominal Aortic Aneurysm Endovascular Repair
-    - Abdominal Aortic Aneurysm Open Repair
-    - A Walking Program for Peripheral Arterial Disease PAD
+**2. Cardiovascular Health:**
+   - Coronary Artery Disease/Stenting (Carotid Artery Stenting, Carotid Artery Disease, Stroke)
+   - Heart Valve Surgery
 
-- **Metabolic & Biochemical Testing**
-    - 24Hour Urine Cortisol
-    - 24Hour Urine Protein
-    - 5Hydroxyindoleacetic Acid Urine
-    - A1C
+**3. Neurological Conditions:**
+   - Alzheimer Disease
+   - Amyotrophic Lateral Sclerosis ALS
+   - Epilepsy
+   - Multiple Sclerosis
+   - Stroke
 
-- **General Health & Wellness**
-    - About Sanitary Pads and Tampons
-    - About Your Asthma Action Plan
-    - About Your Childs Asthma Action Plan
-    - 5 Steps for Eating Healthier
-    - Activities Sheet - Disaster Preparedness 2022
-    - 8 Tips for Communicating Well with Your Healthcare Provider
-    - Abdominoplasty Tummy Tuck
-    - Abdominoplasty with Liposuction
-    - Acetaminophen Drug Level
-    - Acute Bronchitis
+**4. Musculoskeletal Conditions:**
+   - Arthritis
+   - Back Pain (Acute, Chronic, Posture)
+   - Hip Replacement
+   - Knee Arthroscopy
+   - Shoulder Replacement
+   - Scoliosis
+
+**5. Mental Health & Behavioral Health**
+   - Anxiety Disorders
+   - Anger Management
+   - Addiction
+   - Depression
+   - Schizophrenia
+   - Substance Abuse
+
+**6.  Respiratory Health:**
+   - Asthma
+   - Bronchitis
+   - COPD
+
+**7. Infectious Diseases:**
+    - Bacterial Infections (e.g., Pneumonia, Prostatitis, Meningitis)
+    - Candida Infection
+   - Lyme Disease
+    - Varicella
+
+**8.  Women's Health:**
+    - Breast Cancer (screening, treatment, surgery)
+    - Cesarean Section
+    - Menopause
+
+**9.  General Health & Wellness:**
+    - Pain Management
+    - Nutrition (e.g., Eating Healthier, Add Flavor, Diabetes)
+    - Lifestyle (e.g., Exercise, Smoking cessation, Fall prevention)
+    - Mental Well-being
+    - Stress Management
+
+**10. Pediatric Health:**
+    - Childhood Vaccinations
+    - ADHD
+    - Pediatric Nutrition
+
+**11.  Emergency & Acute Care:**
+    - Appendicitis,
+    - Arteriovenous Malformations AVM
     - Abscess Drainage 2024
-    - ACL Rehabilitation Stationary Bike
+    - Cardiac Catheterization 2024
+    - Deep Vein Thrombosis
+    - Stroke
+
+This list is based purely on the provided titles and is designed for clarity and ease of understanding.
