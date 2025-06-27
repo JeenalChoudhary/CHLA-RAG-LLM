@@ -1,6 +1,8 @@
 import streamlit as st
+import os
 import time
 import backend_rag as main
+import chromadb
 import re
 
 def initialize_app():
@@ -22,16 +24,22 @@ def initialize_app():
 def initialize_backend():
     if not st.session_state.db_ready:
         with st.spinner("Preparing the Health Education Navigator... This may take a few moments for initial startup!"):
-            st.session_state.documents = main.load_and_process_pdfs(main.PDF_DIRECTORY)
-            if st.session_state.documents:
-                st.session_state.embedding_model = main.get_embedding_model()
-                st.session_state.collection = main.setup_chromadb(st.session_state.documents, st.session_state.embedding_model, rebuild=False)
-                st.session_state.topic_summary = main.generate_topic_summary(st.session_state.documents, model_name="gemma3:1b")
+            if not os.path.exists(main.DB_PATH) or not os.listdir(main.DB_PATH):
+                st.error(f"Database not found at '{main.DB_PATH}'")
+                st.info("Please run the build script 'backend_rag.py' first to create the database.")
+                st.code("python backend_rag.py --rebuild")
+                st.stop()
+            client = chromadb.PersistentClient(path=main.DB_PATH)
+            try:
+                st.session_state.collection = client.get_collection(main.COLLECTION_NAME)
+                st.session_state.topic_summary = main.generate_topic_summary(st.session_state.collection, model_name="gemma3:1b")
                 st.session_state.db_ready = True
                 if not st.session_state.messages:
                     st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo see what I know about, just ask me: **'What can you teach me?'** \n\nTo exit this application, please type 'exit'."})
-            else:
-                st.error(f"No PDF Documents found in the '{main.PDF_DIRECTORY}' folder. Please check your repository and add your PDF documents.")
+            except ValueError as e:
+                st.error(f"Could not load the database collection: {e}")
+                st.info("It seems the database is present but the collection is missing. Please run the build script to create it.")
+                st.code("python backend_rag.py --rebuild")
                 st.stop()
 
 def draw_sidebar():
@@ -41,7 +49,7 @@ def draw_sidebar():
         st.header("Status")
         if st.session_state.db_ready:
             st.success("Database is ready for querying!")
-            st.info(f"{len(st.session_state.documents)} document chunks loaded.")
+            st.info(f"{st.session_state.collection.count()} document chunks loaded.")
         else:
             st.warning("Database is initializing...")
         st.markdown("-----")
@@ -82,11 +90,13 @@ def handle_user_query(prompt):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
+            if st.session_state.embedding_model is None:
+                message_placeholder.markdown("Loading the embedding model (the first query may take a few moments)...")
+                st.session_state.embedding_model = main.get_embedding_model()
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
                 st.session_state.embedding_model, 
-                st.session_state.documents, 
                 model_name="gemma3:latest"
             )
             if response_generator:
@@ -114,4 +124,3 @@ if __name__ == "__main__":
             st.stop()
         st.session_state.user_input = ""
         handle_user_query(prompt)
-        

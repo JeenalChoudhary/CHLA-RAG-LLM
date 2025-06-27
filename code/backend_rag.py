@@ -26,11 +26,6 @@ EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 SPECIAL_QUERY_TRIGGER = "what can you teach me?"
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
-BROAD_TERMS = ["Diagnosis", "Screening", "Blood Test", "MRI", "CT Scan", "Biopsy Results", "Lab Results", "Symptoms", "Causes", "Complications", "Risks",
-    "Prevention", "Risk Factors", "Treatment Options", "Chemotherapy", "Radiation Therapy", "Targeted Therapy", "Stem Cell Transplant", "Surgery",
-    "Procedures", "Medication", "Drugs", "Coping", "Support", "Short-term Side Effects", "Long-term Side Effects", "Recovery", "Follow-up",
-    "Patient Questions", "Patient Concerns", "Lifestyle", "Self-Care", "Diet", "Exercise", "Activity", "Emergency Care", "Urgent Care", "Leukemia",
-    "ALL", "AML", "Cancer", "Remission", "Relapse"] # For query expansion
 
 # ---- Setup NLTK ----
 try:
@@ -217,7 +212,7 @@ def generate_answer(query, context, model_name):
     for token in response_iter:
         yield token.delta
 
-def handle_query(query, collection, embedding_model, documents, model_name="gemma3"):
+def handle_query(query, collection, embedding_model, model_name="gemma3"):
     logging.info(f"Handling specific query with RAG: '{query}'")
     context, sources = retrieve_context(query, collection, embedding_model)
     if not context.strip():
