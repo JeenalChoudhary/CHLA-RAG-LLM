@@ -24,14 +24,13 @@ PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAME = "NeuML/pubmedbert-base-embeddings"
 SPECIAL_QUERY_TRIGGER = "what can you teach me?"
-
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 BROAD_TERMS = ["Diagnosis", "Screening", "Blood Test", "MRI", "CT Scan", "Biopsy Results", "Lab Results", "Symptoms", "Causes", "Complications", "Risks",
-               "Prevention", "Risk Factors", "Treatment Options", "Chemotherapy", "Radiation Therapy", "Targeted Therapy", "Stem Cell Transplant", "Surgery",
-               "Procedures", "Medication", "Drugs", "Coping", "Support", "Short-term Side Effects", "Long-term Side Effects", "Recovery", "Follow-up",
-               "Patient Questions", "Patient Concerns", "Lifestyle", "Self-Care", "Diet", "Exercise", "Activity", "Emergency Care", "Urgent Care", "Leukemia",
-               "ALL", "AML", "Cancer", "Remission", "Relapse"] # For query expansion
+    "Prevention", "Risk Factors", "Treatment Options", "Chemotherapy", "Radiation Therapy", "Targeted Therapy", "Stem Cell Transplant", "Surgery",
+    "Procedures", "Medication", "Drugs", "Coping", "Support", "Short-term Side Effects", "Long-term Side Effects", "Recovery", "Follow-up",
+    "Patient Questions", "Patient Concerns", "Lifestyle", "Self-Care", "Diet", "Exercise", "Activity", "Emergency Care", "Urgent Care", "Leukemia",
+    "ALL", "AML", "Cancer", "Remission", "Relapse"] # For query expansion
 
 # ---- Setup NLTK ----
 try:
@@ -47,10 +46,8 @@ def clean_pdf_text(text):
     text = re.sub(r".*4650 Sunset Blvd\., Los Angeles, CA 90027.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"© 2000-2027 The StayWell Company, LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"This information is not intended as a substitute for professional medical care.*", "", text, flags=re.IGNORECASE)
-    
     text = re.sub(r'\s*\n\s*', '\n', text)
     text = re.sub(r' {2,}', ' ', text)
-    
     # lines = text.split('\n')
     # unwanted_patterns = [r"What is this test\?", r"Does this test have other names\?", r"Why do I need this test\?", r"What other tests might I have along with this test\?",
     #     r"What do my test results mean\?", r"How is this test done\?", r"Does this test pose any risks\?", r"What might affect my test results\?",
@@ -91,70 +88,53 @@ def clean_pdf_text(text):
     return text
     
 def load_and_process_pdfs(directory):
+    os.makedirs(CACHE_DIR, exist_ok=True)
     if os.path.exists(PROCESSED_DOCS_CACHE):
         logging.info(f"Loading processes documents from cache: {PROCESSED_DOCS_CACHE}")
         with open(PROCESSED_DOCS_CACHE, 'r', encoding='utf-8') as f:
-            documents = json.load(f)
-        logging.info(f"Successfully loaded {len(documents)} documents from cache.")
-        return documents
-    
+            logging.info(f"Successfully loaded {len(json.load(f))} documents from cache.")
+            return json.load(f)
+
     logging.info("No cache was found. Starting the PDF processing from scratch.")
     documents = []
     if not os.path.exists(directory):
         logging.error(f"Directory {directory} does not exist.")
         return documents
-
-    pdf_files = [f for f in os.listdir(directory) if f.lower().endswith(".pdf")]
-    for filename in pdf_files:
-        path = os.path.join(directory, filename)
-        logging.info(f"Processing PDF: {filename}")
-        try:
-            doc = fitz.open(path)
-            full_text = "".join(page.get_text() for page in doc)
-            cleaned_text = clean_pdf_text(full_text)
-            if not cleaned_text:
-                logging.warning(f"No content left in {filename} after cleaning. Skipping this PDF.")
-                continue
-            
-            sentences = nltk.sent_tokenize(cleaned_text)
-            for i in range(0, len(sentences) - SENTENCES_PER_CHUNK + 1, STRIDE):
-                chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
-                documents.append({
-                    "content":chunk,
-                    "metadata":{
-                        "source": filename,
-                        "language": "english",
-                        "start_sentence_index": i
-                    }
-                })
-            
-            if (len(sentences) % STRIDE != 0) and (len(sentences) > SENTENCES_PER_CHUNK):
-                last_chunk_start = len(sentences) - SENTENCES_PER_CHUNK
-                if not documents or last_chunk_start > documents[-1]['metadata']['start_sentence_index']:
-                    chunk = " ".join(sentences[last_chunk_start:])
-                    documents.append({
-                    "content":chunk,
-                    "metadata":{
-                        "source": filename,
-                        "language": "english",
-                        "start_sentence_index": last_chunk_start
-                        }
-                    })
-
-        except Exception as e:
-            logging.error(f"Failed to process {filename}: {e}")
-            
-    logging.info(f"Successfully processed {len(os.listdir(directory))} PDFs into {len(documents)} chunks.")
     
-    try:
-        with open(PROCESSED_DOCS_CACHE, 'w', encoding='utf-8') as f:
-            json.dump(documents, f, indent=4)
-        logging.info(f"Saved processed chunks to cache: {PROCESSED_DOCS_CACHE}")
-    except Exception as e:
-        logging.error(f"Failed to save cache file: {e}")
-        
+    for filename in os.listdir(directory):
+        if filename.lower().endswith('.pdf'):
+            path = os.path.join(directory, filename)
+            logging.info(f"Processing PDF: {filename}")
+            try:
+                doc = fitz.open(path)
+                full_text = "".join(page.get_text() for page in doc)
+                cleaned_text = clean_pdf_text(full_text)
+                if not cleaned_text:
+                    logging.warning(f"No content left in {filename} after cleaning. Skipping this PDF.")
+                    continue
+                sentences = nltk.sent_tokenize(cleaned_text)
+                for i in range(0, len(sentences) - SENTENCES_PER_CHUNK + 1, STRIDE):
+                    chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
+                    documents.append({
+                        "content":chunk,
+                        "metadata":{"source": filename, "language": "english", "start_sentence_index": i}
+                    })
+                if (len(sentences) % STRIDE != 0) and (len(sentences) > SENTENCES_PER_CHUNK):
+                    last_chunk_start = len(sentences) - SENTENCES_PER_CHUNK
+                    if not documents or last_chunk_start > documents[-1]['metadata']['start_sentence_index']:
+                        chunk = " ".join(sentences[last_chunk_start:])
+                        documents.append({
+                        "content":chunk,
+                        "metadata":{"source": filename, "language": "english", "start_sentence_index": last_chunk_start}
+                        })
+            except Exception as e:
+                logging.error(f"Failed to process {filename}: {e}")
+    
+    logging.info(f"Successfully processed {len(os.listdir(directory))} PDFs into {len(documents)} chunks.")
+    with open(PROCESSED_DOCS_CACHE, 'w', encoding='utf-8') as f:
+        json.dump(documents, f, indent=2)
+    logging.info(f"Saved processed chunks to cache: {PROCESSED_DOCS_CACHE}")
     return documents
-
 
 #---- Vector database setup ----
 def get_embedding_model():
@@ -164,52 +144,51 @@ def get_embedding_model():
 
 def setup_chromadb(documents, embedding_model, rebuild=False):
     client = chromadb.PersistentClient(path=DB_PATH)
-    
     if rebuild:
-        try:
-            if COLLECTION_NAME in [c.name for c in client.list_collections()]:
-                logging.info(f'Rebuilding DB... Deleting existing collection {COLLECTION_NAME}')
-                client.delete_collection(name=COLLECTION_NAME)
-        except Exception as e:
-            logging.error(f"Error in deleting collection: {e}")
-            
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
-    )
-    
+        if COLLECTION_NAME in [c.name for c in client.list_collections()]:
+            logging.info(f'Rebuilding DB... Deleting existing collection {COLLECTION_NAME}')
+            client.delete_collection(name=COLLECTION_NAME)
+    collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
     if collection.count() == 0:
-        if not documents:
-            logging.warning(f"There are 0 documents to populate the database with. Please check you have added documents to the {PDF_DIRECTORY} directory.")
-            return collection
-        
         logging.info(f"Database is empty or rebuild is forced. Populating with new data...")
         batch_size = 256
-        
         for i in range(0, len(documents), batch_size):
             document_batch = documents[i:i + batch_size]
             contents_batch = [doc['content'] for doc in document_batch]
             metadata_batch = [doc['metadata'] for doc in document_batch]
             id_batch = [f"doc_{i+j}" for j in range(len(document_batch))]
-            
             embeddings_batch = embedding_model.encode(contents_batch, show_progress_bar=True).tolist()
-            collection.add(
-                embeddings=embeddings_batch,
-                documents=contents_batch,
-                metadatas=metadata_batch,
-                ids=id_batch
-            )
+            collection.add(embeddings=embeddings_batch, documents=contents_batch, metadatas=metadata_batch, ids=id_batch)
             logging.info(f"Added batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size} to ChromaDB.")
         logging.info(f"Successfully added {len(documents)} documents to ChromaDB.")
     else:
         logging.info("Existing documents found and loaded")
-    
     return collection
+
+def generate_hypothetical_document(query, model_name="gemma3:1b"):
+    prompt = f"""
+    A user is asking the following question: "{query}"
+    Please write a detailed, high-quality paragraph that answers this question as if it were from a reliable medical education document.
+    Focus on addressing the key terms and concepts in the user's question.
+    This will be used to find the most relevant documents in a database.
+    
+    HYPOTHETICAL ANSWER:
+    """
+    try:
+        logging.info(f"Generating hypothetical document for query: '{query}'")
+        llm = Ollama(model=model_name, request_timeout=60.0)
+        response = llm.complete(prompt)
+        logging.info("Successfully generated hypothetical document.")
+        return response.text
+    except Exception as e:
+        logging.error(f"Error generating hypothetical document: {e}")
+        return query
 
 #---- Retrieval and Generation ----
 def retrieve_context(query, collection, embedding_model, n_results=2):
     logging.info(f"Retrieving context for query: '{query}'")
-    query_embedding = embedding_model.encode(query).tolist()
+    hypothetical_document = generate_hypothetical_document(query)
+    query_embedding = embedding_model.encode(hypothetical_document).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=n_results)
     context = "\n\n---\n\n".join(results['documents'][0])
     sources = sorted(list(set(meta['source'] for meta in results['metadatas'][0])))
@@ -218,21 +197,36 @@ def retrieve_context(query, collection, embedding_model, n_results=2):
 
 def generate_answer(query, context, model_name):
     prompt_template = f"""
-    You are a helpful medical information assistant. 
-    Your task is to answer the user's question based *only* on the provided context from Mayo Clinic documents. 
-    If the information is not in the context, explicitly state that you cannot answer the question with the given information and do not list any sources. 
+    You are a friendly and empathetic medical information assistant from Children's Hospital Los Angeles.
+    Your task is to answer the user's question in a clear, simple, and reassuring way, based *only* on the provided context.
+    - If the user uses informal language (like "puffer things"), acknowledge it and use the correct medical term in your answer (e.g., "The 'puffer thing' you mentioned is called on inhaler...").
+    - If the context does not contain the answer, explicity state that you cannot answer the question with the provided information and do not list any sources.
+    - Structure your answer with paragraphs and bullet points if it makes it easier to read.
+    - Always base your answer *strictly* on the provided context. Do not use outside knowledge.
     
-    CONTEXT: {context}
+    Context:
+    {context}
     
-    QUESTION: {query}
+    Question: {query}
     
-    ANSWER:
+    Answer:
     """
     logging.info(f"Sending prompt to Ollama model via LlamaIndex: {model_name}")
     llm = Ollama(model=model_name, request_timeout=120.0, temperature=0)
     response_iter = llm.stream_complete(prompt_template)
     for token in response_iter:
         yield token.delta
+
+def handle_query(query, collection, embedding_model, documents, model_name="gemma3"):
+    logging.info(f"Handling specific query with RAG: '{query}'")
+    context, sources = retrieve_context(query, collection, embedding_model)
+    if not context.strip():
+        logging.warning("Retrieval returned empty context. The model will likely be unable to answer.")
+        def empty_answer():
+            yield "I could not find any information related to your question in the documents I have access to."
+        return empty_answer(), []
+    answer_stream = generate_answer(query, context, model_name)
+    return answer_stream, sources
 
 def generate_topic_summary(documents, model_name):
     if os.path.exists(TOPIC_SUMMARY_CACHE):
@@ -268,58 +262,6 @@ def generate_topic_summary(documents, model_name):
     except Exception as e:
         logging.error(f"Error in generating topic summary: {e}")
         return "I am currently unable to generate a list of topics as an error occurred. Please try asking a specific question."
-
-def generate_query_expansion_options(query, model_name="gemma3:1b"):
-    if not any(term in query.lower() for term in BROAD_TERMS):
-        return []
-    
-    prompt = f"""
-    A user has provided the following health-related query: {query}
-    This is too broad. Your task is to generate 3-4 clarifying questions to help them narrow down their search.
-    These questions should be presented as distinct, actionable options.
-    For example, for "diabetes", you could suggest "What are the symptoms of diabetes?" or "How is diabetes treated?".
-    Return ONLY a Python-parseable list of strings. Do not include any other text or explanation.
-    
-    Example format:
-    ["What are the symptoms of {query}", "What are the treatment options for {query}", "What are the risk factors for {query}"]
-    """
-    try:
-        logging.info(f"Generating query expansion options for '{query}' using {model_name}")
-        llm = Ollama(model=model_name, request_timeout=120.0, temperature=0)
-        response = llm.complete(prompt)
-        match = re.search(r'\[\s*".*?"\s*(,\s*".*?"\s*)*\]', response)
-        if match:
-            options = eval(match.group(0))
-            logging.info(f"Generated options: {options}")
-            return options
-        else:
-            logging.warning("Could not parse the query expansion options from LLM response.")
-            return []
-    except Exception as e:
-        logging.error(f"Error during query expansion: {e}")
-        return []
-    
-def handle_query(query, collection, embedding_model, documents, model_name="gemma3"):
-    if SPECIAL_QUERY_TRIGGER in query.lower():
-        logging.info("Special query detected. Generating topic list.")
-        summary_text = generate_topic_summary(documents, model_name)
-        full_response_text = "I can provide information on the following topics. Please feel free to ask a question about any of them:\n\n" + summary_text
-        
-        def stream_summary():
-            yield full_response_text
-        
-        return stream_summary(), []
-    
-    expansion_options = generate_query_expansion_options(query)
-    if expansion_options:
-        logging.info(f"Broad query detected. Returning expansion options: {expansion_options}")
-        return None, expansion_options
-    
-    else:
-        logging.info(f"Specific query detected. Performing RAG for '{query}'")
-        context, sources = retrieve_context(query, collection, embedding_model)
-        answer_stream = generate_answer(query, context, model_name)
-        return answer_stream, sources
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the RAG backend for health documents.")

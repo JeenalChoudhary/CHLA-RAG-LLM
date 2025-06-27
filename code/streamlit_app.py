@@ -16,8 +16,6 @@ def initialize_app():
         st.session_state.embedding_model = None
     if 'topic_summary' not in st.session_state:
         st.session_state.topic_summary = ""
-    if 'query_options' not in st.session_state:
-        st.session_state.query_options = []
     if 'user_input' not in st.session_state:
         st.session_state.user_input = ""
 
@@ -68,43 +66,22 @@ def draw_topic_buttons():
             buttons_per_row = 6
             rows_of_topics = [main_topics[i:i+buttons_per_row] for i in range(0, len(main_topics), buttons_per_row)]
             for row in rows_of_topics:
-                cols = st.columns(row)
+                cols = st.columns(len(row))
                 for i, topic in enumerate(row):
                     if cols[i].button(topic, key=f"topic_{topic}"):
                         st.session_state.user_input = topic
                         st.rerun()
 
-def draw_clarification_buttons():
-    if st.session_state.query_options:
-        clarification_text = "That is a great question! To give you the most relevant information, could you please specify what you're looking for?"
-        if not st.session_state.messages or st.session_state.messages[-1]['content'] != clarification_text:
-            st.session_state.messages.append({"role":"assistant", "content":clarification_text})
-        st.experimental_rerun()
-    if st.session_state.messages and "please specify" in st.session_state.messages[-1].get("content", ""):
-        with st.chat_message("assistant"):
-            st.markdown(st.session_state.messages[-1]["content"])
-            for option in st.session_state.query_options:
-                if st.button(option, key=f"option_{option}"):
-                    st.session_state.user_input = option
-                    st.session_state.query_options = []
-                    st.rerun()
-
 def handle_user_query(prompt):
     if not prompt:
         return
-    
     st.session_state.messages.append({"role":"user", "content":prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
-    
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
-            options = main.generate_query_expansion_options(prompt, model_name="gemma3:1b")
-            if options:
-                st.session_state.query_options = options
-                st.rerun()
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
@@ -121,7 +98,6 @@ def handle_user_query(prompt):
                 cleaned_sources = [s.replace("_", " ").replace(".pdf", "") for s in sorted(list(set(sources)))]
                 source_text = "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in cleaned_sources)
                 full_response += source_text
-                
             message_placeholder.markdown(full_response)
     if full_response:
         st.session_state.messages.append({"role":"assistant", "content":full_response})
@@ -132,7 +108,6 @@ if __name__ == "__main__":
     initialize_backend()
     draw_chat_history()
     draw_topic_buttons()
-    draw_clarification_buttons()
     
     if prompt := st.chat_input("Ask a question about a health topic!") or st.session_state.user_input:
         if prompt.lower() == "exit":
