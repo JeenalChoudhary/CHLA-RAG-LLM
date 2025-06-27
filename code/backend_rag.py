@@ -162,10 +162,17 @@ def setup_chromadb(documents, embedding_model, rebuild=False):
 
 def generate_hypothetical_document(query, model_name="gemma3:1b"):
     prompt = f"""
-    A user is asking the following question: "{query}"
-    Please write a detailed, high-quality paragraph that answers this question as if it were from a reliable medical education document.
-    Focus on addressing the key terms and concepts in the user's question.
-    This will be used to find the most relevant documents in a database.
+    Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
+    This paragraph will be used to improve database search retrieval for answer generation.
+    
+    The paragraph must be authoritative and detailed. Structure it to include the following, in a logical flow:
+    1. Start with a clear **definition** of the main subject.
+    2. Describe the primary **indications and purpose** (why and when it is used).
+    3. Incorporate relevant **technical details**, such as different types, materials, or procedural aspects.
+    4. Detail its **applications**, including the types of substances administered (e.g., nutritional formulas, medications, etc.).
+    5. Conclude by discussing **management, key monitoring parameters, and potential complications**.
+    
+    Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph.
     
     HYPOTHETICAL ANSWER:
     """
