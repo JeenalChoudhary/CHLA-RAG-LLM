@@ -180,7 +180,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
         return query
 
 #---- Retrieval and Generation ----
-def retrieve_context(query, collection, embedding_model, n_results=2):
+def retrieve_context(query, collection, embedding_model, n_results=7):
     logging.info(f"Retrieving context for query: '{query}'")
     hypothetical_document = generate_hypothetical_document(query)
     query_embedding = embedding_model.encode(hypothetical_document).tolist()
