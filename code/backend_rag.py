@@ -173,7 +173,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
         logging.info(f"Generating hypothetical document for query: '{query}'")
         llm = Ollama(model=model_name, request_timeout=60.0)
         response = llm.complete(prompt)
-        logging.info("Successfully generated hypothetical document.")
+        logging.info(f"Successfully generated hypothetical document. Hypothetical answer: {response.text}")
         return response.text
     except Exception as e:
         logging.error(f"Error generating hypothetical document: {e}")
