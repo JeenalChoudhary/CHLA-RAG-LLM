@@ -54,7 +54,7 @@ def download_files():
             print(f"Found {len(file_elements)} files on this page.")
             for i in range(len(file_elements)):
                 try:
-                    current_file = driver.find_element(By.CSS_SELECTOR, 'a[data-automationid="ListItem-title"]')[i]
+                    current_file = driver.find_elements(By.CSS_SELECTOR, 'a[data-automationid="ListItem-title"]')[i]
                     file_name = current_file.text
                     if os.path.exists(os.path.join(DOWNLOAD_DIRECTORY, file_name)):
                         print(f"  - Skipping {file_name} (already downloaded)")
