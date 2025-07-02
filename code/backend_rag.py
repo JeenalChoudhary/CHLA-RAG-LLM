@@ -140,10 +140,10 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
 def retrieve_context(query, collection, language, n_results=7):
     if language == "en":
         model_key = "english_medical"
-        where_filter = {'model':'english_medical'}
+        where_filter = {'language':'en', 'model':'english_medical'}
     else:
         model_key = "multilingual"
-        where_filter = {'model':'multilingual'}
+        where_filter = {'language':language, 'model':'multilingual'}
     embedding_model = get_embedding_model(model_key)
     logging.info(f"Retrieving context for {language} query: '{query}' using '{model_key}' model.")
     hypothetical_document = generate_hypothetical_document(query)
@@ -261,8 +261,8 @@ if __name__ == "__main__":
         collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
         if collection.count() == 0:
             logging.info("Database is empty. Populating with hybrid embedding strategy...")
-            english_docs = [doc for doc in docs if docs['metadata']['language'] == 'en']
-            other_docs = [doc for doc in docs if docs['metadata']['language'] != 'en']
+            english_docs = [doc for doc in docs if doc['metadata']['language'] == 'en']
+            other_docs = [doc for doc in docs if doc['metadata']['language'] != 'en']
             english_embedding = get_embedding_model("english_medical")
             other_embedding = get_embedding_model("multilingual")
             batch_size = 128
