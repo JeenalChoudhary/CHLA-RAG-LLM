@@ -8,18 +8,16 @@ import re
 def initialize_app():
     if 'db_ready' not in st.session_state:
         st.session_state.db_ready = False
-    if 'documents' not in st.session_state:
-        st.session_state.documents = []
     if 'messages' not in st.session_state:
         st.session_state.messages = []
     if 'collection' not in st.session_state:
         st.session_state.collection = None
-    if 'embedding_model' not in st.session_state:
-        st.session_state.embedding_model = None
     if 'topic_summary' not in st.session_state:
         st.session_state.topic_summary = ""
     if 'user_input' not in st.session_state:
         st.session_state.user_input = ""
+    if "language" not in st.session_state:
+        st.session_state.language = "en"
 
 def initialize_backend():
     if not st.session_state.db_ready:
@@ -33,6 +31,8 @@ def initialize_backend():
             try:
                 st.session_state.collection = client.get_collection(main.COLLECTION_NAME)
                 st.session_state.topic_summary = main.generate_topic_summary(st.session_state.collection, model_name="gemma3:1b")
+                with open(main.TOPIC_SUMMARY_CACHE, 'w', encoding='utf-8') as f:
+                    f.write(st.session_state.topic_summary)
                 st.session_state.db_ready = True
                 if not st.session_state.messages:
                     st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo see what I know about, just ask me: **'What can you teach me?'** \n\nTo exit this application, please type 'exit'."})
@@ -47,17 +47,8 @@ def draw_sidebar():
         st.header("Patient Health Education Navigator")
         st.markdown("-----")
         st.header("Status")
-        if st.session_state.db_ready:
-            st.success("Database is ready for querying!")
-            st.info(f"{st.session_state.collection.count()} document chunks loaded.")
-        else:
-            st.warning("Database is initializing...")
-        st.markdown("-----")
-        st.header("Filters")
-        st.info("These filters are for demonstration and are not yet functional.")
-        st.selectbox("Language", ["English", "Spanish"], key="language_filter")
-        st.selectbox("Audience", ["Pediatric", "Adult"], key="audience_filter")
-        st.selectbox("Category", ["Asthma", "Diabetes"], key="category_filter")
+        st.success("Database is ready for querying!")
+        st.info(f"{st.session_state.collection.count()} document chunks loaded.")
         st.markdown("-----")
         st.markdown("Built with ❤️ for CHLA's Patient Family Education Initiative")
         
@@ -90,13 +81,9 @@ def handle_user_query(prompt):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
-            if st.session_state.embedding_model is None:
-                message_placeholder.markdown("Loading the embedding model (the first query may take a few moments)...")
-                st.session_state.embedding_model = main.get_embedding_model()
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
-                st.session_state.embedding_model, 
                 model_name="gemma3:latest"
             )
             if response_generator:

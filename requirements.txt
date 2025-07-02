@@ -8,10 +8,7 @@ sentence_transformers
 chromadb
 requests
 nltk
-python-dotenv
-azure-functions
-msgraph-sdk
-azure-identity
+langdetect
 protobuf==3.20.3
 llama-index-core
 llama-index-llms-ollama
