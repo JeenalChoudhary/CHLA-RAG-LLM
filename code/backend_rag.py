@@ -122,7 +122,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
     4. Detail its **applications**, including the types of substances administered (e.g., nutritional formulas, medications, etc.).
     5. Conclude by discussing **management, key monitoring parameters, and potential complications**.
     
-    Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph.
+    Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph. Do not include any introductory or concluding text, just the paragraph itself.
     
     HYPOTHETICAL ANSWER:
     """
@@ -140,10 +140,10 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
 def retrieve_context(query, collection, language, n_results=7):
     if language == "en":
         model_key = "english_medical"
-        where_filter = {'language':'en', 'model':'english_medical'}
+        where_filter = {"$and": [{"language": {"$eq": "en"}}, {"model": {"$eq": "english_medical"}}]}
     else:
         model_key = "multilingual"
-        where_filter = {'language':language, 'model':'multilingual'}
+        where_filter = {"$and": [{"language": {"$eq": language}}, {"model": {"$eq": "multilingual"}}]}
     embedding_model = get_embedding_model(model_key)
     logging.info(f"Retrieving context for {language} query: '{query}' using '{model_key}' model.")
     hypothetical_document = generate_hypothetical_document(query)
@@ -202,20 +202,24 @@ def handle_query(query, collection, model_name="gemma3"):
     answer_stream = generate_answer(query, context, model_name, query_lang_code)
     return answer_stream, sources
 
-def generate_topic_summary(documents, model_name):
+def generate_topic_summary(collection, model_name):
     if os.path.exists(TOPIC_SUMMARY_CACHE):
         logging.info(f"Loading topic summary from cache: {TOPIC_SUMMARY_CACHE}")
         with open(TOPIC_SUMMARY_CACHE, 'r', encoding='utf-8') as f:
             return f.read()
     logging.info("No topic summary cache found. Generating a new topic summary with the LLM...")
-    unique_sources = sorted(list(set(doc['metadata']['source'] for doc in documents)))
+    db_contents = collection.get()
+    metadatas = db_contents.get('metadatas')
+    if not metadatas:
+        logging.error("Could not retrieve documents from the database to generate a summary.")
+        return "Error: Could not retrieve document topics."
+    unique_sources = sorted(list(set(meta['source'] for meta in metadatas)))
     cleaned_topics = []
     for source in unique_sources:
         topic = re.sub(r'(_English|_202\d)?\.pdf', '', source, flags=re.IGNORECASE)
         topic = topic.replace('_', ' ').replace('ALL', '(ALL)').replace('AML', '(AML)')
         cleaned_topics.append(topic)
     topics_text = "\n".join(f"- {topic}" for topic in cleaned_topics)
-    
     prompt = f"""
     You are a helpful assistant. Based on the following list of medical document titles, please generate a clean, user-friendly, and concise bulleted list of the main health topics covered.
     Group related topics together under a clear, bolded heading (e.g., **Luekemia**). Do not use more than 5-6 top-level categories.
@@ -227,7 +231,7 @@ def generate_topic_summary(documents, model_name):
     CONCISE TOPIC LIST:
     """
     try:
-        llm = Ollama(model=model_name, request_timeout=300.0)
+        llm = Ollama(model=model_name, request_timeout=1200.0)
         response = llm.complete(prompt)
         with open(TOPIC_SUMMARY_CACHE, 'w', encoding='utf-8') as f:
             f.write(response.text)
@@ -249,6 +253,9 @@ if __name__ == "__main__":
             shutil.rmtree(DB_PATH)
         if os.path.exists(CACHE_DIR):
             shutil.rmtree(CACHE_DIR)
+        if os.path.exists(TOPIC_SUMMARY_CACHE):
+            logging.info(f"Deleting old topic summary cache: {TOPIC_SUMMARY_CACHE}")
+            os.remove(TOPIC_SUMMARY_CACHE)
         os.makedirs(CACHE_DIR)
         
     logging.info("Starting RAG backend setup...")
@@ -267,8 +274,11 @@ if __name__ == "__main__":
             other_embedding = get_embedding_model("multilingual")
             batch_size = 128
             if english_docs:
-                logging.info(f"Embedding {len(english_docs)} English documents with PubMedBERT...")
+                total_english_batches = (len(english_docs) + batch_size - 1) // batch_size
+                logging.info(f"Embedding {len(english_docs)} English documents with PubMedBERT in {total_english_batches} batches...")
                 for i in range(0, len(english_docs), batch_size):
+                    batch_num = (i // batch_size) + 1
+                    logging.info(f"Processing English batch {batch_num}/{total_english_batches}...")
                     batch = english_docs[i:i + batch_size]
                     contents = [doc['content'] for doc in batch]
                     metadata = [doc['metadata'] for doc in batch]
@@ -278,8 +288,11 @@ if __name__ == "__main__":
                     embeddings = english_embedding.encode(contents, show_progress_bar=True).tolist()
                     collection.add(embeddings=embeddings, documents=contents, metadatas=metadata, ids=ids)
             if other_docs:
-                logging.info(f"Embedding {len(other_docs)} non-English documents with multilingual model...")
+                total_other_batches = (len(other_docs) + batch_size - 1) // batch_size
+                logging.info(f"Embedding {len(other_docs)} non-English documents with multilingual model in {total_other_batches} batches...")
                 for i in range(0, len(other_docs), batch_size):
+                    current_batch_num = (i // batch_size) + 1
+                    logging.info(f"Processing multilingual batch {current_batch_num}/{total_other_batches}...")
                     batch = other_docs[i:i + batch_size]
                     contents = [doc['content'] for doc in batch]
                     metadatas = [doc['metadata'] for doc in batch]

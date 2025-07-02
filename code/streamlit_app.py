@@ -3,7 +3,6 @@ import os
 import time
 import backend_rag as main
 import chromadb
-import re
 
 def initialize_app():
     if 'db_ready' not in st.session_state:
@@ -57,19 +56,19 @@ def draw_chat_history():
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-def draw_topic_buttons():
-    if st.session_state.topic_summary and len(st.session_state.messages) <= 1:
-        main_topics = re.findall(r'\*\*(.*?)\*\*', st.session_state.topic_summary, re.DOTALL)
-        if main_topics:
-            st.markdown("#### Suggested Health Education Topics")
-            buttons_per_row = 6
-            rows_of_topics = [main_topics[i:i+buttons_per_row] for i in range(0, len(main_topics), buttons_per_row)]
-            for row in rows_of_topics:
-                cols = st.columns(len(row))
-                for i, topic in enumerate(row):
-                    if cols[i].button(topic, key=f"topic_{topic}"):
-                        st.session_state.user_input = topic
-                        st.rerun()
+# def draw_topic_buttons():
+#     if st.session_state.topic_summary and len(st.session_state.messages) <= 1:
+#         main_topics = re.findall(r'\*\*(.*?)\*\*', st.session_state.topic_summary, re.DOTALL)
+#         if main_topics:
+#             st.markdown("#### Suggested Health Education Topics")
+#             buttons_per_row = 6
+#             rows_of_topics = [main_topics[i:i+buttons_per_row] for i in range(0, len(main_topics), buttons_per_row)]
+#             for row in rows_of_topics:
+#                 cols = st.columns(len(row))
+#                 for i, topic in enumerate(row):
+#                     if cols[i].button(topic, key=f"topic_{topic}"):
+#                         st.session_state.user_input = topic
+#                         st.rerun()
 
 def handle_user_query(prompt):
     if not prompt:
@@ -101,10 +100,10 @@ def handle_user_query(prompt):
         
 if __name__ == "__main__":
     initialize_app()
-    draw_sidebar()
     initialize_backend()
+    draw_sidebar()
     draw_chat_history()
-    draw_topic_buttons()
+    # draw_topic_buttons()
     
     if prompt := st.chat_input("Ask a question about a health topic!") or st.session_state.user_input:
         if prompt.lower() == "exit":
