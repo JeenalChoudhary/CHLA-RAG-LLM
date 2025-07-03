@@ -25,6 +25,7 @@ COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings",
                          "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
 _embedding_models = {}
+_llm_models = {}
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 
@@ -45,7 +46,7 @@ def clean_pdf_text(text):
     text = re.sub(r'\s*\n\s*', '\n', text)
     text = re.sub(r' {2,}', ' ', text)
     return text
-    
+
 def load_and_process_pdfs(directory):
     os.makedirs(CACHE_DIR, exist_ok=True)
     if os.path.exists(PROCESSED_DOCS_CACHE):
@@ -110,6 +111,13 @@ def get_embedding_model(model_key="english_medical"):
         _embedding_models[model_key] = SentenceTransformer(model_name, device=device)
     return _embedding_models[model_key]
 
+def get_llm(model_name, temperature=0.25, timeout=300.0):
+    cache_key = (model_name, temperature)
+    if cache_key not in _llm_models:
+        logging.info(f"Loading LLM model: '{model_name}' with temperature={temperature} for the first time.")
+        _llm_models[cache_key] = Ollama(model=model_name, temperature=temperature, request_timeout=timeout)
+    return _llm_models[cache_key]
+
 def generate_hypothetical_document(query, model_name="gemma3:1b"):
     prompt = f"""
     Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
@@ -128,7 +136,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
     """
     try:
         logging.info(f"Generating hypothetical document for query: '{query}'")
-        llm = Ollama(model=model_name, request_timeout=60.0)
+        llm = get_llm(model_name, timeout=30)
         response = llm.complete(prompt)
         logging.info(f"Successfully generated hypothetical document. Hypothetical answer: {response.text}")
         return response.text
@@ -179,26 +187,24 @@ def generate_answer(query, context, model_name, language_name):
     Answer in {friendly_language_name}:
     """
     logging.info(f"Sending prompt to Ollama model via LlamaIndex: {model_name}")
-    llm = Ollama(model=model_name, request_timeout=120.0, temperature=0)
+    llm = get_llm(model_name, temperature=0)
     response_iter = llm.stream_complete(prompt_template)
     for token in response_iter:
         yield token.delta
 
-def handle_query(query, collection, model_name="gemma3"):
+def handle_query(query, collection, model_name="gemma3:1b"):
     logging.info(f"Handling specific query with RAG: '{query}'")
     try:
         query_lang_code = detect(query)
     except LangDetectException:
         logging.warning("Could not detect query language. Defaulting to English ('en').")
         query_lang_code = "en"
-        
     context, sources = retrieve_context(query, collection, query_lang_code)
     if not context.strip():
         logging.warning("Retrieval returned empty context. The model will likely be unable to answer.")
         def empty_answer():
             yield "I could not find any information related to your question in the documents I have access to."
         return empty_answer(), []
-    
     answer_stream = generate_answer(query, context, model_name, query_lang_code)
     return answer_stream, sources
 
@@ -231,7 +237,7 @@ def generate_topic_summary(collection, model_name):
     CONCISE TOPIC LIST:
     """
     try:
-        llm = Ollama(model=model_name, request_timeout=1200.0)
+        llm = get_llm(model_name, request_timeout=1200.0)
         response = llm.complete(prompt)
         with open(TOPIC_SUMMARY_CACHE, 'w', encoding='utf-8') as f:
             f.write(response.text)
