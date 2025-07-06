@@ -83,7 +83,7 @@ def handle_user_query(prompt):
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
-                model_name="gemma3:latest"
+                model_name="gemma3:1b-it-qat"
             )
             if response_generator:
                 for chunk in response_generator:

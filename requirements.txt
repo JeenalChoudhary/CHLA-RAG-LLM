@@ -9,6 +9,7 @@ chromadb
 requests
 nltk
 langdetect
+hf_xet
 protobuf==3.20.3
 llama-index-core
 llama-index-llms-ollama

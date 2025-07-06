@@ -118,7 +118,7 @@ def get_llm(model_name, temperature=0.25, timeout=300.0):
         _llm_models[cache_key] = Ollama(model=model_name, temperature=temperature, request_timeout=timeout)
     return _llm_models[cache_key]
 
-def generate_hypothetical_document(query, model_name="gemma3:1b"):
+def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
     prompt = f"""
     Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
     This paragraph will be used to improve database search retrieval for answer generation.
@@ -136,7 +136,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b"):
     """
     try:
         logging.info(f"Generating hypothetical document for query: '{query}'")
-        llm = get_llm(model_name, timeout=30)
+        llm = get_llm(model_name)
         response = llm.complete(prompt)
         logging.info(f"Successfully generated hypothetical document. Hypothetical answer: {response.text}")
         return response.text
@@ -192,7 +192,7 @@ def generate_answer(query, context, model_name, language_name):
     for token in response_iter:
         yield token.delta
 
-def handle_query(query, collection, model_name="gemma3:1b"):
+def handle_query(query, collection, model_name):
     logging.info(f"Handling specific query with RAG: '{query}'")
     try:
         query_lang_code = detect(query)
@@ -226,6 +226,7 @@ def generate_topic_summary(collection, model_name):
         topic = topic.replace('_', ' ').replace('ALL', '(ALL)').replace('AML', '(AML)')
         cleaned_topics.append(topic)
     topics_text = "\n".join(f"- {topic}" for topic in cleaned_topics)
+    logging.info(f"Topics to summarize: {topics_text}")
     prompt = f"""
     You are a helpful assistant. Based on the following list of medical document titles, please generate a clean, user-friendly, and concise bulleted list of the main health topics covered.
     Group related topics together under a clear, bolded heading (e.g., **Luekemia**). Do not use more than 5-6 top-level categories.
