@@ -2,7 +2,7 @@ import os
 import re
 import fitz
 import chromadb
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 import torch
 import logging
 import json
@@ -24,10 +24,16 @@ PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings",
                          "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
-_embedding_models = {}
-_llm_models = {}
+RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
+
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
+INITIAL_RETRIEVAL_COUNT = 25
+FINAL_CONTEXT_COUNT = 7
+
+_embedding_models = {}
+_llm_models = {}
+_reranker_model = None
 
 # ---- Setup NLTK ----
 try:
@@ -111,6 +117,14 @@ def get_embedding_model(model_key="english_medical"):
         _embedding_models[model_key] = SentenceTransformer(model_name, device=device)
     return _embedding_models[model_key]
 
+def get_reranker_model():
+    global _reranker_model
+    if _reranker_model is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logging.info(f"Loading reranker model '{RERANKER_MODEL_NAME}' on device {device}")
+        _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, device=device)
+    return _reranker_model
+
 def get_llm(model_name, temperature=0.25, timeout=300.0):
     cache_key = (model_name, temperature)
     if cache_key not in _llm_models:
@@ -145,7 +159,7 @@ def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
         return query
 
 #---- Retrieval and Generation ----
-def retrieve_context(query, collection, language, n_results=7):
+def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT):
     if language == "en":
         model_key = "english_medical"
         where_filter = {"$and": [{"language": {"$eq": "en"}}, {"model": {"$eq": "english_medical"}}]}
@@ -156,13 +170,26 @@ def retrieve_context(query, collection, language, n_results=7):
     logging.info(f"Retrieving context for {language} query: '{query}' using '{model_key}' model.")
     hypothetical_document = generate_hypothetical_document(query)
     query_embedding = embedding_model.encode(hypothetical_document).tolist()
-    results = collection.query(query_embeddings=[query_embedding], n_results=n_results, where=where_filter)
-    if not results['documents'] or not results['documents'][0]:
+    results = collection.query(query_embeddings=[query_embedding], n_results=INITIAL_RETRIEVAL_COUNT, where=where_filter)
+    retrieved_docs = results['documents'][0]
+    retrieved_metadata = results['metadatas'][0]
+    if not retrieved_docs:
         logging.warning(f"No documents found for language {language}. Retrieval failed.")
         return "", []
-    context = "\n\n---\n\n".join(results['documents'][0])
-    sources = sorted(list(set(meta['source'] for meta in results['metadatas'][0])))
-    logging.info(f"Retrieved context from sources: {list(sources)}")
+    logging.info(f"Retrieved {len(retrieved_docs)} candidate documents for reranking.")
+    reranker = get_reranker_model()
+    rerank_pairs = [[query, doc] for doc in retrieved_docs]
+    scores = reranker.predict(rerank_pairs, show_progress_bar=True)
+    scored_docs = list(zip(scores, retrieved_docs, retrieved_metadata))
+    scored_docs.sort(key=lambda x: x[0], reverse=True)
+    top_reranked_docs = scored_docs[:n_results]
+    final_docs = [doc for score, doc, meta in top_reranked_docs]
+    final_metadata = [meta for score, doc, meta in top_reranked_docs]
+    context = "\n\n---\n\n".join(final_docs)
+    sources = sorted(list(set(meta['source'] for meta in final_metadata)))
+    logging.info(f"Reranked and selected top {len(final_docs)} documents.")
+    logging.info(f"Retrieved final context from sources: {list(sources)}")
+    
     return context, sources
 
 def generate_answer(query, context, model_name, language_name):
