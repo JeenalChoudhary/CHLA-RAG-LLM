@@ -34,7 +34,7 @@ def initialize_backend():
                     f.write(st.session_state.topic_summary)
                 st.session_state.db_ready = True
                 if not st.session_state.messages:
-                    st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo see what I know about, just ask me: **'What can you teach me?'** \n\nTo exit this application, please type 'exit'."})
+                    st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo exit this application, please type 'exit'."})
             except ValueError as e:
                 st.error(f"Could not load the database collection: {e}")
                 st.info("It seems the database is present but the collection is missing. Please run the build script to create it.")
@@ -55,20 +55,6 @@ def draw_chat_history():
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-
-# def draw_topic_buttons():
-#     if st.session_state.topic_summary and len(st.session_state.messages) <= 1:
-#         main_topics = re.findall(r'\*\*(.*?)\*\*', st.session_state.topic_summary, re.DOTALL)
-#         if main_topics:
-#             st.markdown("#### Suggested Health Education Topics")
-#             buttons_per_row = 6
-#             rows_of_topics = [main_topics[i:i+buttons_per_row] for i in range(0, len(main_topics), buttons_per_row)]
-#             for row in rows_of_topics:
-#                 cols = st.columns(len(row))
-#                 for i, topic in enumerate(row):
-#                     if cols[i].button(topic, key=f"topic_{topic}"):
-#                         st.session_state.user_input = topic
-#                         st.rerun()
 
 def handle_user_query(prompt):
     if not prompt:
@@ -103,7 +89,6 @@ if __name__ == "__main__":
     initialize_backend()
     draw_sidebar()
     draw_chat_history()
-    # draw_topic_buttons()
     
     if prompt := st.chat_input("Ask a question about a health topic!") or st.session_state.user_input:
         if prompt.lower() == "exit":

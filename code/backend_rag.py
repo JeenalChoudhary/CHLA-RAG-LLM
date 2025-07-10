@@ -23,7 +23,7 @@ TOPIC_SUMMARY_CACHE = os.path.join(SCRIPT_DIRECTORY, "topic_summary.md")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings",
-                         "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
+                    "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
 RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 
 SENTENCES_PER_CHUNK = 6
@@ -189,7 +189,6 @@ def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT)
     sources = sorted(list(set(meta['source'] for meta in final_metadata)))
     logging.info(f"Reranked and selected top {len(final_docs)} documents.")
     logging.info(f"Retrieved final context from sources: {list(sources)}")
-    
     return context, sources
 
 def generate_answer(query, context, model_name, language_name):
@@ -198,13 +197,18 @@ def generate_answer(query, context, model_name, language_name):
                     "ph":"Tagalog", "vi":"Vietnamese"}
     friendly_language_name = language_map.get(language_name.lower(), language_name)
     prompt_template = f"""
-    You are a friendly and empathetic medical information assistant from Children's Hospital Los Angeles.
-    Your task is to answer the user's question in a clear, simple, and reassuring way, based *only* on the provided context.
+    You are an expert medical educator and assistant from Children's Hospital Los Angeles. Your purpose is to act as a guide, providing clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level.
+    You MUST answer the user's question based STRICTLY on the provided context. NEVER include an introduction sentence or explain your reasoning.
+    
+    Follow these rules meticulously to create the best possible answer:
+    1. **Tone and Introduction:** For serious or stressful topics (like choking or asthma attacks), ALWAYS begin with a short, reassuring sentence that acknowledges the user's question. Example: "That's a very important question, and it is smart to prepare. Here are the steps to follow based on the provided information."
+    2. **Emergency Actions:** For any emergency, first synthesize all immediate actions from the context. State the most critical step (like "**First, call 911 immediately.**") and then detail any "while-you-wait" steps, such as using a rescue inhaler, as described in the documents.
+    3. **Complete Procedures:** When the context describes a procedure (like first aid), you MUST extract and list **ALL** of the steps in order from beginning to end. Use a numbered list. A partial or summarized procedure is a failed answer. Be exhaustive.
+    4. **Comprehensive Answers:** NEVER give a simple "Yes" or "No." After providing a direct answer, you MUST thoroughly explain the "how" and "why" by synthesizing all relevant details from the context. For example, after answering "Yes, a child can talk with a trach tube," you must then immediately explain the methods described in the text, such as speaking valves or finger occlusion.
+    5. **Synthesize, Don't Summarize:** Your primary goal is to synthesize information from ALL relevant context passages. Combine related details from different parts of the text to form a single, complete, and seamless answer.
+    6. **Handling Missing Information:** If the context truly does not contain the information to answer the question, state that clearly. For example: "Based on the documents I have, I cannot find specific information on that topic." Do not list sources if you cannot answer.
+    
     ***IMPORTANT: You must write your entire answer in {friendly_language_name}.***
-    - If the user uses informal language (like "puffer things"), acknowledge it and use the correct medical term in your answer (e.g., "The 'puffer thing' you mentioned is called on inhaler...").
-    - If the context does not contain the answer, explicity state that you cannot answer the question with the provided information (in {friendly_language_name}) and do not list any sources.
-    - Structure your answer with paragraphs and bullet points if it makes it easier to read.
-    - Always base your answer *strictly* on the provided context. Do not use outside knowledge.
     
     Context:
     {context}
