@@ -21,8 +21,8 @@ DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 CACHE_DIR = os.path.join(SCRIPT_DIRECTORY, "cache")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 COLLECTION_NAME = "example_health_docs"
-EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings",
-                    "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
+EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings"}
+                # "multilingual":"paraphrase-multilingual-mpnet-base-v2"}
 RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 
 SENTENCES_PER_CHUNK = 6
@@ -53,13 +53,15 @@ def clean_pdf_text(text):
     return text
 
 def detect_language(text):
-    try:
-        lang_code, confidence = langid.classify(text)
-        logging.info(f"Detected language: {lang_code} with {confidence} confidence.")
-        return lang_code
-    except Exception as e:
-        logging.error(f"Failed to detect language: {e}. Defaulting to English ('en').")
-        return "en"
+    logging.info("Language detection is disabled. Defaulting to English ('en').")
+    return "en"
+    # try:
+    #     lang_code, confidence = langid.classify(text)
+    #     logging.info(f"Detected language: {lang_code} with {confidence} confidence.")
+    #     return lang_code
+    # except Exception as e:
+    #     logging.error(f"Failed to detect language: {e}. Defaulting to English ('en').")
+    #     return "en"
         
 def load_and_process_pdfs(directory):
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -137,23 +139,42 @@ def get_llm(model_name, temperature=0.25, timeout=300.0):
     return _llm_models[cache_key]
 
 def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
-    prompt = f"""
-    Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
-    This paragraph will be used to improve database search retrieval for answer generation.
-    
-    The paragraph must be authoritative and detailed. Structure it to include the following, in a logical flow:
-    1. Start with a clear **definition** of the main subject.
-    2. Describe the primary **indications and purpose** (why and when it is used).
-    3. Incorporate relevant **technical details**, such as different types, materials, or procedural aspects.
-    4. Detail its **applications**, including the types of substances administered (e.g., nutritional formulas, medications, etc.).
-    5. Conclude by discussing **management, key monitoring parameters, and potential complications**.
-    
-    Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph. Do not include any introductory or concluding text, just the paragraph itself.
-    
-    HYPOTHETICAL ANSWER:
-    """
+    query_lower = query.lower()
+    word_count = len(query_lower.split())
+    is_question = any(query_lower.startswith(q) for q in ['how', 'what', 'when', 'why', 'can', 'do', 'is']) or '?' in query_lower
+    if word_count < 5 and not is_question:
+        prompt = f"""
+        Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
+        This paragraph will be used to improve database search retrieval for answer generation.
+        
+        The paragraph must be authoritative and detailed. Structure it to include the following, in a logical flow:
+        1. Start with a clear **definition** of the main subject.
+        2. Describe the primary **indications and purpose** (why and when it is used).
+        3. Incorporate relevant **technical details**, such as different types, materials, or procedural aspects.
+        4. Detail its **applications**, including the types of substances administered (e.g., nutritional formulas, medications, etc.).
+        5. Conclude by discussing **management, key monitoring parameters, and potential complications**.
+        
+        Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph. Do not include any introductory or concluding text, just the paragraph itself.
+        
+        HYPOTHETICAL ANSWER:
+        """
+        logging.info(f"Generating definitional document for simpler terms: '{query}'.")
+    else:
+        prompt = f"""
+        You are an expert medical writer. Your task is to generate an ideal, detailed paragraph that directly and hypothetically answers the user's question. 
+        This paragraph will be used to find the most relevant information in a medical database.
+        
+        The user's question is: '{query}'
+        
+        **Instructions:**
+        1. **Directly Answer:** Begin by creating a hypothetical, direct answer to the question based on common medical knowledge.
+        2. **Elaborate:** Expand on the answer by explaining the 'how' and 'why'. Include details about related procedures, different methods, or what a caregiver should know. For example, if a question is about talking with a trach tube, explain the mechanincs of using a speaking valve or finger occlusion.
+        3. **Maintain Focus:** Keep the entire paragraph focused on answering the specific question. **DO NOT** just define the general topic.
+        4. **Format:** Write a single, dense, and cohesive paragraph. NEVER use lists or headings. NEVER add any introductory phrases like "The answer is...".
+        
+        HYPOTHETICAL DOCUMENT:
+        """
     try:
-        logging.info(f"Generating hypothetical document for query: '{query}'")
         llm = get_llm(model_name)
         response = llm.complete(prompt)
         logging.info(f"Successfully generated hypothetical document. Hypothetical answer: {response.text}")
@@ -164,12 +185,8 @@ def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
 
 #---- Retrieval and Generation ----
 def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT):
-    if language == "en":
-        model_key = "english_medical"
-        where_filter = {"$and": [{"language": {"$eq": "en"}}, {"model": {"$eq": "english_medical"}}]}
-    else:
-        model_key = "multilingual"
-        where_filter = {"$and": [{"language": {"$eq": language}}, {"model": {"$eq": "multilingual"}}]}
+    model_key = "english_medical"
+    where_filter = {"$and": [{"language": {"$eq": "en"}}, {"model": {"$eq": "english_medical"}}]}
     embedding_model = get_embedding_model(model_key)
     logging.info(f"Retrieving context for {language} query: '{query}' using '{model_key}' model.")
     hypothetical_document = generate_hypothetical_document(query)
@@ -196,10 +213,7 @@ def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT)
     return context, sources
 
 def generate_answer(query, context, model_name, language_name, conversation_history=""):
-    language_map = {"es": "Spanish", "en": "English", "ar": "Arabic", "zh":"Chinese", "hy":"Armenian", "fa":"Farsi/Persian", 
-                    "ht":"Hatian/French-Creole", "hi":"Hindi", "ja":"Japanese", "ko":"Korean", "pa":"Punjabi", "ru":"Russian",
-                    "ph":"Tagalog", "vi":"Vietnamese"}
-    friendly_language_name = language_map.get(language_name.lower(), language_name)
+    friendly_language_name = "English"
     history_prompt = ""
     if conversation_history:
         history_prompt = f"""
@@ -209,17 +223,29 @@ def generate_answer(query, context, model_name, language_name, conversation_hist
         ----
         """
     prompt_template = f"""
-    You are an expert medical educator and assistant from Children's Hospital Los Angeles. Your purpose is to act as a guide, providing clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level.
+    You are an expert medical educator and assistant at Children's Hospital Los Angeles. Your purpose is to act as a guide, providing clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level.
     You MUST answer the user's question based STRICTLY on the provided context. NEVER include an introduction sentence or explain your reasoning.
     
     {history_prompt}
     
     Follow these rules meticulously to create the best possible answer:
-    1. **Tone and Introduction:** For serious or stressful topics (like choking or asthma attacks), ALWAYS begin with a short, reassuring sentence that acknowledges the user's question. Example: "That's a very important question, and it is smart to prepare. Here are the steps to follow based on the provided information."
-    2. **Emergency Actions:** For any emergency, first synthesize all immediate actions from the context. State the most critical step (like "**First, call 911 immediately.**") and then detail any "while-you-wait" steps, such as using a rescue inhaler, as described in the documents.
-    3. **Complete Procedures:** When the context describes a procedure (like first aid), you MUST extract and list **ALL** of the steps in order from beginning to end. Use a numbered list. A partial or summarized procedure is a failed answer. Be exhaustive.
-    4. **Comprehensive Answers:** NEVER give a simple "Yes" or "No." After providing a direct answer, you MUST thoroughly explain the "how" and "why" by synthesizing all relevant details from the context. For example, after answering "Yes, a child can talk with a trach tube," you must then immediately explain the methods described in the text, such as speaking valves or finger occlusion.
-    5. **Synthesize, Don't Summarize:** Your primary goal is to synthesize information from ALL relevant context passages. Combine related details from different parts of the text to form a single, complete, and seamless answer.
+    
+    **RULE 0: Handle Vague/Short Queries ONLY.**
+    - **CONDITION:** Check if the user's query, '{query}', has **FEWER THAN 4 words**.
+    - **ACTION (if the condition is met):**
+        1. Synthesize a breif, helpful overview of the topic in 1-2 paragraphs. The goal is to answer "What is {query}?" in simple terms.
+        2. Append the following text: "This is a general overview. To give you more specific information, could you tell me more about your question? For example, you can ask about:"
+        3. Present three clarifying follow-up prompts as a bulleted or numbered list (e.g., Symptoms and warning signs; Home care or treatment steps; When to call the doctor for {query}).
+        4. **STOP** and do not follow any other rules.
+    ----
+    **RULE 1: Answer All Specific Questions Directly.**
+    - **Condition:** If the user's query has **4 OR MORE words**, you must provide a direct and comprehensive answer.
+    - **Action (if the condition is met):** Synthesize information from ALL relevant context passages to form a single, complete, and seamless answer. **DO NOT** use phrases like "This is a general overview" or try to ask clarifying questions. Answer the user's question completely.
+    ----
+    2. **Tone and Introduction:** For serious or stressful topics (like choking or asthma attacks), ALWAYS begin with a short, reassuring sentence that acknowledges the user's question. Example: "That's a very important question, and it is smart to prepare. Here are the steps to follow based on the provided information."
+    3. **Emergency Actions:** For any emergency, first synthesize all immediate actions from the context. State the most critical step (like "**First, call 911 immediately.**") and then detail any "while-you-wait" steps, such as using a rescue inhaler, as described in the documents.
+    4. **Complete Procedures:** When the context describes a procedure (like first aid), you MUST extract and list **ALL** of the steps in order from beginning to end. Use a numbered list. A partial or summarized procedure is a failed answer. Be exhaustive.
+    5. **Comprehensive Answers:** NEVER give a simple "Yes" or "No." After providing a direct answer, you MUST thoroughly explain the "how" and "why" by synthesizing all relevant details from the context. For example, after answering "Yes, a child can talk with a trach tube," you must then immediately explain the methods described in the text, such as speaking valves or finger occlusion.
     6. **Handling Missing Information:** If the context truly does not contain the information to answer the question, state that clearly. For example: "Based on the documents I have, I cannot find specific information on that topic." Do not list sources if you cannot answer.
     
     ***IMPORTANT: You must write your entire answer in {friendly_language_name}.***
@@ -273,39 +299,39 @@ if __name__ == "__main__":
         collection = client.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
         if collection.count() == 0:
             logging.info("Database is empty. Populating with hybrid embedding strategy...")
-            english_docs = [doc for doc in docs if doc['metadata']['language'] == 'en']
-            other_docs = [doc for doc in docs if doc['metadata']['language'] != 'en']
+            # english_docs = [doc for doc in docs if doc['metadata']['language'] == 'en']
+            # other_docs = [doc for doc in docs if doc['metadata']['language'] != 'en']
             english_embedding = get_embedding_model("english_medical")
-            other_embedding = get_embedding_model("multilingual")
-            batch_size = 128
-            if english_docs:
-                total_english_batches = (len(english_docs) + batch_size - 1) // batch_size
-                logging.info(f"Embedding {len(english_docs)} English documents with PubMedBERT in {total_english_batches} batches...")
-                for i in range(0, len(english_docs), batch_size):
-                    batch_num = (i // batch_size) + 1
-                    logging.info(f"Processing English batch {batch_num}/{total_english_batches}...")
-                    batch = english_docs[i:i + batch_size]
-                    contents = [doc['content'] for doc in batch]
-                    metadata = [doc['metadata'] for doc in batch]
-                    for meta in metadata:
-                        meta['model'] = 'english_medical'
-                    ids = [f"en_doc_{i+j}" for j in range(len(batch))]
-                    embeddings = english_embedding.encode(contents, show_progress_bar=True).tolist()
-                    collection.add(embeddings=embeddings, documents=contents, metadatas=metadata, ids=ids)
-            if other_docs:
-                total_other_batches = (len(other_docs) + batch_size - 1) // batch_size
-                logging.info(f"Embedding {len(other_docs)} non-English documents with multilingual model in {total_other_batches} batches...")
-                for i in range(0, len(other_docs), batch_size):
-                    current_batch_num = (i // batch_size) + 1
-                    logging.info(f"Processing multilingual batch {current_batch_num}/{total_other_batches}...")
-                    batch = other_docs[i:i + batch_size]
-                    contents = [doc['content'] for doc in batch]
-                    metadatas = [doc['metadata'] for doc in batch]
-                    for meta in metadatas:
-                        meta['model'] = 'multilingual'
-                    ids = [f"multi_doc_{i+j}" for j in range(len(batch))]
-                    embeddings = other_embedding.encode(contents, show_progress_bar=True).tolist()
-                    collection.add(embeddings=embeddings, documents=contents, metadatas=metadatas, ids=ids)
+            # other_embedding = get_embedding_model("multilingual")
+            batch_size = 512
+            # if english_docs:
+            total_english_batches = (len(docs) + batch_size - 1) // batch_size
+            logging.info(f"Embedding {len(docs)} English documents with PubMedBERT in {total_english_batches} batches...")
+            for i in range(0, len(docs), batch_size):
+                batch_num = (i // batch_size) + 1
+                logging.info(f"Processing English batch {batch_num}/{total_english_batches}...")
+                batch = docs[i:i + batch_size]
+                contents = [doc['content'] for doc in batch]
+                metadata = [doc['metadata'] for doc in batch]
+                for meta in metadata:
+                    meta['model'] = 'english_medical'
+                ids = [f"en_doc_{i+j}" for j in range(len(batch))]
+                embeddings = english_embedding.encode(contents, show_progress_bar=True).tolist()
+                collection.add(embeddings=embeddings, documents=contents, metadatas=metadata, ids=ids)
+            # if other_docs:
+            #     total_other_batches = (len(other_docs) + batch_size - 1) // batch_size
+            #     logging.info(f"Embedding {len(other_docs)} non-English documents with multilingual model in {total_other_batches} batches...")
+            #     for i in range(0, len(other_docs), batch_size):
+            #         current_batch_num = (i // batch_size) + 1
+            #         logging.info(f"Processing multilingual batch {current_batch_num}/{total_other_batches}...")
+            #         batch = other_docs[i:i + batch_size]
+            #         contents = [doc['content'] for doc in batch]
+            #         metadatas = [doc['metadata'] for doc in batch]
+            #         for meta in metadatas:
+            #             meta['model'] = 'multilingual'
+            #         ids = [f"multi_doc_{i+j}" for j in range(len(batch))]
+            #         embeddings = other_embedding.encode(contents, show_progress_bar=True).tolist()
+            #         collection.add(embeddings=embeddings, documents=contents, metadatas=metadatas, ids=ids)
             logging.info(f"Hybrid embedding complete. Total documents in DB: {collection.count()}")
         else:
             logging.info(f"Database already populated. Skipping ingestion.")

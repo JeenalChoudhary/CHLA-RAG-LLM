@@ -47,8 +47,8 @@ def draw_sidebar():
         st.info(f"{st.session_state.collection.count()} document chunks loaded.")
         st.markdown("-----")
         st.header("Conversation Limit")
-        st.info("The chat will reset after 10 messages to ensure relevance and accuracy.")
-        st.metric(label="Message Progress", value=f"{st.session_state.message_count} / 10")
+        st.info("The chat will reset after 20 messages to ensure relevance and accuracy.")
+        st.metric(label="Message Progress", value=f"{st.session_state.message_count} / 20")
         st.markdown("-----")
         st.markdown("Built with ❤️ for CHLA's Patient Family Education Initiative")
         
@@ -68,8 +68,8 @@ def handle_user_query(prompt):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
-            history_for_context = st.session_state.messages[-7:-1]
-            conversation_history = "\n".join([f"{msg["role"]}: {msg['content']}" for msg in history_for_context])
+            history_for_context = st.session_state.messages[:]
+            conversation_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history_for_context])
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
@@ -89,7 +89,7 @@ def handle_user_query(prompt):
     if full_response:
         st.session_state.messages.append({"role":"assistant", "content":full_response})
         st.session_state.message_count += 1
-        
+
 if __name__ == "__main__":
     initialize_app()
     initialize_backend()
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             st.stop()
         st.session_state.user_input = ""
         handle_user_query(prompt)
-        if st.session_state.message_count >= 10:
+        if st.session_state.message_count >= 20:
             st.success("Conversation limit has been reached. Starting a fresh chat for you! ✨")
             st.balloons()
             time.sleep(3)
