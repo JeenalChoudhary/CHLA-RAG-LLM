@@ -6,7 +6,7 @@ from sentence_transformers import SentenceTransformer, CrossEncoder
 import torch
 import logging
 import json
-from langdetect import detect, LangDetectException
+import langid
 from llama_index.llms.ollama import Ollama
 import nltk
 import argparse
@@ -19,7 +19,6 @@ SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 PDF_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "docs")
 DB_PATH = os.path.join(SCRIPT_DIRECTORY, "db")
 CACHE_DIR = os.path.join(SCRIPT_DIRECTORY, "cache")
-TOPIC_SUMMARY_CACHE = os.path.join(SCRIPT_DIRECTORY, "topic_summary.md")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = {"english_medical":"NeuML/pubmedbert-base-embeddings",
@@ -53,6 +52,15 @@ def clean_pdf_text(text):
     text = re.sub(r' {2,}', ' ', text)
     return text
 
+def detect_language(text):
+    try:
+        lang_code, confidence = langid.classify(text)
+        logging.info(f"Detected language: {lang_code} with {confidence} confidence.")
+        return lang_code
+    except Exception as e:
+        logging.error(f"Failed to detect language: {e}. Defaulting to English ('en').")
+        return "en"
+        
 def load_and_process_pdfs(directory):
     os.makedirs(CACHE_DIR, exist_ok=True)
     if os.path.exists(PROCESSED_DOCS_CACHE):
@@ -78,12 +86,8 @@ def load_and_process_pdfs(directory):
                 if not cleaned_text:
                     logging.warning(f"No content left in {filename} after cleaning. Skipping this PDF.")
                     continue
-                try:
-                    detected_language = detect(cleaned_text[:100])
-                    logging.info(f"Detected language: {detected_language} for {filename}")
-                except LangDetectException:
-                    logging.warning(f"Could not detect language for {filename}. Defaulting to English ('en').")
-                    detected_language = 'en'
+                detected_language = detect_language(cleaned_text[:500])
+                logging.info(f"Detected language: {detected_language} for {filename}")
                 sentences = nltk.sent_tokenize(cleaned_text)
                 for i in range(0, len(sentences) - SENTENCES_PER_CHUNK + 1, STRIDE):
                     chunk = " ".join(sentences[i:i + SENTENCES_PER_CHUNK])
@@ -191,14 +195,24 @@ def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT)
     logging.info(f"Retrieved final context from sources: {list(sources)}")
     return context, sources
 
-def generate_answer(query, context, model_name, language_name):
+def generate_answer(query, context, model_name, language_name, conversation_history=""):
     language_map = {"es": "Spanish", "en": "English", "ar": "Arabic", "zh":"Chinese", "hy":"Armenian", "fa":"Farsi/Persian", 
                     "ht":"Hatian/French-Creole", "hi":"Hindi", "ja":"Japanese", "ko":"Korean", "pa":"Punjabi", "ru":"Russian",
                     "ph":"Tagalog", "vi":"Vietnamese"}
     friendly_language_name = language_map.get(language_name.lower(), language_name)
+    history_prompt = ""
+    if conversation_history:
+        history_prompt = f"""
+        Here is the recent conversation history. Use it to understand the context of the user's latest question, if relevant:
+        ----
+        {conversation_history}
+        ----
+        """
     prompt_template = f"""
     You are an expert medical educator and assistant from Children's Hospital Los Angeles. Your purpose is to act as a guide, providing clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level.
     You MUST answer the user's question based STRICTLY on the provided context. NEVER include an introduction sentence or explain your reasoning.
+    
+    {history_prompt}
     
     Follow these rules meticulously to create the best possible answer:
     1. **Tone and Introduction:** For serious or stressful topics (like choking or asthma attacks), ALWAYS begin with a short, reassuring sentence that acknowledges the user's question. Example: "That's a very important question, and it is smart to prepare. Here are the steps to follow based on the provided information."
@@ -223,13 +237,9 @@ def generate_answer(query, context, model_name, language_name):
     for token in response_iter:
         yield token.delta
 
-def handle_query(query, collection, model_name):
+def handle_query(query, collection, model_name, conversation_history=[]):
     logging.info(f"Handling specific query with RAG: '{query}'")
-    try:
-        query_lang_code = detect(query)
-    except LangDetectException:
-        logging.warning("Could not detect query language. Defaulting to English ('en').")
-        query_lang_code = "en"
+    query_lang_code = detect_language(query)
     context, sources = retrieve_context(query, collection, query_lang_code)
     if not context.strip():
         logging.warning("Retrieval returned empty context. The model will likely be unable to answer.")
@@ -238,46 +248,6 @@ def handle_query(query, collection, model_name):
         return empty_answer(), []
     answer_stream = generate_answer(query, context, model_name, query_lang_code)
     return answer_stream, sources
-
-def generate_topic_summary(collection, model_name):
-    if os.path.exists(TOPIC_SUMMARY_CACHE):
-        logging.info(f"Loading topic summary from cache: {TOPIC_SUMMARY_CACHE}")
-        with open(TOPIC_SUMMARY_CACHE, 'r', encoding='utf-8') as f:
-            return f.read()
-    logging.info("No topic summary cache found. Generating a new topic summary with the LLM...")
-    db_contents = collection.get()
-    metadatas = db_contents.get('metadatas')
-    if not metadatas:
-        logging.error("Could not retrieve documents from the database to generate a summary.")
-        return "Error: Could not retrieve document topics."
-    unique_sources = sorted(list(set(meta['source'] for meta in metadatas)))
-    cleaned_topics = []
-    for source in unique_sources:
-        topic = re.sub(r'(_English|_202\d)?\.pdf', '', source, flags=re.IGNORECASE)
-        topic = topic.replace('_', ' ').replace('ALL', '(ALL)').replace('AML', '(AML)')
-        cleaned_topics.append(topic)
-    topics_text = "\n".join(f"- {topic}" for topic in cleaned_topics)
-    logging.info(f"Topics to summarize: {topics_text}")
-    prompt = f"""
-    You are a helpful assistant. Based on the following list of medical document titles, please generate a clean, user-friendly, and concise bulleted list of the main health topics covered.
-    Group related topics together under a clear, bolded heading (e.g., **Luekemia**). Do not use more than 5-6 top-level categories.
-    The final output should be formatted in Markdown. Do not include any introductory or concluding text, just the Markdown list.
-    
-    DOCUMENT TITLES:
-    {topics_text}
-    
-    CONCISE TOPIC LIST:
-    """
-    try:
-        llm = get_llm(model_name, request_timeout=1200.0)
-        response = llm.complete(prompt)
-        with open(TOPIC_SUMMARY_CACHE, 'w', encoding='utf-8') as f:
-            f.write(response.text)
-        logging.info(f"Topic summary generated and cached to {TOPIC_SUMMARY_CACHE}")
-        return response.text
-    except Exception as e:
-        logging.error(f"Error in generating topic summary: {e}")
-        return "I am currently unable to generate a list of topics as an error occurred. Please try asking a specific question."
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the RAG backend for health documents.")
@@ -291,9 +261,6 @@ if __name__ == "__main__":
             shutil.rmtree(DB_PATH)
         if os.path.exists(CACHE_DIR):
             shutil.rmtree(CACHE_DIR)
-        if os.path.exists(TOPIC_SUMMARY_CACHE):
-            logging.info(f"Deleting old topic summary cache: {TOPIC_SUMMARY_CACHE}")
-            os.remove(TOPIC_SUMMARY_CACHE)
         os.makedirs(CACHE_DIR)
         
     logging.info("Starting RAG backend setup...")

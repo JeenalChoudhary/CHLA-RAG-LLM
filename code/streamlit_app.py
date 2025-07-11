@@ -11,12 +11,12 @@ def initialize_app():
         st.session_state.messages = []
     if 'collection' not in st.session_state:
         st.session_state.collection = None
-    if 'topic_summary' not in st.session_state:
-        st.session_state.topic_summary = ""
     if 'user_input' not in st.session_state:
         st.session_state.user_input = ""
     if "language" not in st.session_state:
         st.session_state.language = "en"
+    if "message_count" not in st.session_state:
+        st.session_state.message_count = 0
 
 def initialize_backend():
     if not st.session_state.db_ready:
@@ -29,9 +29,6 @@ def initialize_backend():
             client = chromadb.PersistentClient(path=main.DB_PATH)
             try:
                 st.session_state.collection = client.get_collection(main.COLLECTION_NAME)
-                st.session_state.topic_summary = main.generate_topic_summary(st.session_state.collection, model_name="gemma3:1b")
-                with open(main.TOPIC_SUMMARY_CACHE, 'w', encoding='utf-8') as f:
-                    f.write(st.session_state.topic_summary)
                 st.session_state.db_ready = True
                 if not st.session_state.messages:
                     st.session_state.messages.append({"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo exit this application, please type 'exit'."})
@@ -49,6 +46,10 @@ def draw_sidebar():
         st.success("Database is ready for querying!")
         st.info(f"{st.session_state.collection.count()} document chunks loaded.")
         st.markdown("-----")
+        st.header("Conversation Limit")
+        st.info("The chat will reset after 10 messages to ensure relevance and accuracy.")
+        st.metric(label="Message Progress", value=f"{st.session_state.message_count} / 10")
+        st.markdown("-----")
         st.markdown("Built with ❤️ for CHLA's Patient Family Education Initiative")
         
 def draw_chat_history():
@@ -60,16 +61,20 @@ def handle_user_query(prompt):
     if not prompt:
         return
     st.session_state.messages.append({"role":"user", "content":prompt})
+    st.session_state.message_count += 1
     with st.chat_message("user"):
         st.markdown(prompt)
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
+            history_for_context = st.session_state.messages[-7:-1]
+            conversation_history = "\n".join([f"{msg["role"]}: {msg['content']}" for msg in history_for_context])
             response_generator, sources = main.handle_query(
                 prompt, 
                 st.session_state.collection, 
-                model_name="gemma3:1b-it-qat"
+                model_name="gemma3:1b-it-qat",
+                conversation_history=conversation_history
             )
             if response_generator:
                 for chunk in response_generator:
@@ -83,6 +88,7 @@ def handle_user_query(prompt):
             message_placeholder.markdown(full_response)
     if full_response:
         st.session_state.messages.append({"role":"assistant", "content":full_response})
+        st.session_state.message_count += 1
         
 if __name__ == "__main__":
     initialize_app()
@@ -95,3 +101,12 @@ if __name__ == "__main__":
             st.stop()
         st.session_state.user_input = ""
         handle_user_query(prompt)
+        if st.session_state.message_count >= 10:
+            st.success("Conversation limit has been reached. Starting a fresh chat for you! ✨")
+            st.balloons()
+            time.sleep(3)
+            st.session_state.messages = [{"role":"assistant", "content":"Hello! I am an assistant with Children's Hospital Los Angeles. I can help you understand various health topics. How can I assist you today? \n\nTo exit this application, please type 'exit'."}]
+            st.session_state.message_count = 0
+            st.rerun()
+        else:
+            st.rerun()
