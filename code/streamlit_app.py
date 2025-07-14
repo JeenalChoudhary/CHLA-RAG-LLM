@@ -68,7 +68,7 @@ def handle_user_query(prompt):
         message_placeholder = st.empty()
         full_response = ""
         with st.spinner("Thinking..."):
-            history_for_context = st.session_state.messages[:]
+            history_for_context = st.session_state.messages[-7:-1]
             conversation_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in history_for_context])
             response_generator, sources = main.handle_query(
                 prompt, 

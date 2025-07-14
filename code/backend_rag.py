@@ -138,39 +138,47 @@ def get_llm(model_name, temperature=0.25, timeout=300.0):
         _llm_models[cache_key] = Ollama(model=model_name, temperature=temperature, request_timeout=timeout)
     return _llm_models[cache_key]
 
-def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
+def generate_hypothetical_document(query, conversation_history="",model_name="gemma3:1b-it-qat"):
     query_lower = query.lower()
     word_count = len(query_lower.split())
     is_question = any(query_lower.startswith(q) for q in ['how', 'what', 'when', 'why', 'can', 'do', 'is']) or '?' in query_lower
+    history_prompt_section = ""
+    if conversation_history:
+        history_prompt_section = f"""
+        Here is the recent conversation history. Use it to understand the full context of the user's latest query.
+        ---
+        {conversation_history}
+        ---
+        """
     if word_count < 5 and not is_question:
         prompt = f"""
-        Generate a single, comprehensive paragraph for a medical education document in response to the user's query: '{query}'.
-        This paragraph will be used to improve database search retrieval for answer generation.
+        You are a medical writer creating a hypothetical document for a database search.
+        {history_prompt_section}
+        Your task is to generate a single, comprehensive paragraph about the user's query: '{query}'.
         
-        The paragraph must be authoritative and detailed. Structure it to include the following, in a logical flow:
-        1. Start with a clear **definition** of the main subject.
-        2. Describe the primary **indications and purpose** (why and when it is used).
-        3. Incorporate relevant **technical details**, such as different types, materials, or procedural aspects.
-        4. Detail its **applications**, including the types of substances administered (e.g., nutritional formulas, medications, etc.).
-        5. Conclude by discussing **management, key monitoring parameters, and potential complications**.
+        **Instructions:** Use the conversation history to tailor the paragraph. For example, if the history is about "a newborn baby" and the user's query is "feeding tubes", the hypothetical document should be about **feeding tubes specifically for newborns.**
         
-        Ensure the text is dense with relevant medical terminology and flows in a single, cohesive paragraph. Do not include any introductory or concluding text, just the paragraph itself.
+        The paragraph must be authoritative and detailed, including:
+        1. A clear definition of the main subject.
+        2. Its primary purpose and indications.
+        3. Relevant technical details and types.
+        4. Key management considerations and potential complications and risks.
+        
+        Write only the self-contained paragraph. DO NOT add any introductory text.
         
         HYPOTHETICAL ANSWER:
         """
         logging.info(f"Generating definitional document for simpler terms: '{query}'.")
     else:
         prompt = f"""
-        You are an expert medical writer. Your task is to generate an ideal, detailed paragraph that directly and hypothetically answers the user's question. 
-        This paragraph will be used to find the most relevant information in a medical database.
+        You are a medical writer creating a hypothetical document for a database search.
+        {history_prompt_section}
+        Your task is to generate an ideal, detailed paragraph that directly and hypothetical answers and/or extends the user's question: '{query}'.
         
-        The user's question is: '{query}'
+        **Instructions:** Use the conversation history to understand and resolve the user's query. For example, if the history is about "g-tubes" and the query is "how do I clean it?", the hypothetical document should be a detailed answer or extension about **the specific procedure for cleaning a g-tube.**
         
-        **Instructions:**
-        1. **Directly Answer:** Begin by creating a hypothetical, direct answer to the question based on common medical knowledge.
-        2. **Elaborate:** Expand on the answer by explaining the 'how' and 'why'. Include details about related procedures, different methods, or what a caregiver should know. For example, if a question is about talking with a trach tube, explain the mechanincs of using a speaking valve or finger occlusion.
-        3. **Maintain Focus:** Keep the entire paragraph focused on answering the specific question. **DO NOT** just define the general topic.
-        4. **Format:** Write a single, dense, and cohesive paragraph. NEVER use lists or headings. NEVER add any introductory phrases like "The answer is...".
+        Elaborate on the answer by explaining the 'how' and 'why', including details about related procedures, or what a caregiver should know.
+        The final paragraph must be self-contained, dense, and cohesive. Do not use lists or add introductory or concluding phrases.
         
         HYPOTHETICAL DOCUMENT:
         """
@@ -184,12 +192,12 @@ def generate_hypothetical_document(query, model_name="gemma3:1b-it-qat"):
         return query
 
 #---- Retrieval and Generation ----
-def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT):
+def retrieve_context(query, collection, language, conversation_history="", n_results=FINAL_CONTEXT_COUNT):
     model_key = "english_medical"
     where_filter = {"$and": [{"language": {"$eq": "en"}}, {"model": {"$eq": "english_medical"}}]}
     embedding_model = get_embedding_model(model_key)
     logging.info(f"Retrieving context for {language} query: '{query}' using '{model_key}' model.")
-    hypothetical_document = generate_hypothetical_document(query)
+    hypothetical_document = generate_hypothetical_document(query, conversation_history)
     query_embedding = embedding_model.encode(hypothetical_document).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=INITIAL_RETRIEVAL_COUNT, where=where_filter)
     retrieved_docs = results['documents'][0]
@@ -212,7 +220,7 @@ def retrieve_context(query, collection, language, n_results=FINAL_CONTEXT_COUNT)
     logging.info(f"Retrieved final context from sources: {list(sources)}")
     return context, sources
 
-def generate_answer(query, context, model_name, language_name, conversation_history=""):
+def generate_answer(query, context, model_name, conversation_history=""):
     friendly_language_name = "English"
     history_prompt = ""
     if conversation_history:
@@ -223,30 +231,34 @@ def generate_answer(query, context, model_name, language_name, conversation_hist
         ----
         """
     prompt_template = f"""
-    You are an expert medical educator and assistant at Children's Hospital Los Angeles. Your purpose is to act as a guide, providing clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level.
-    You MUST answer the user's question based STRICTLY on the provided context. NEVER include an introduction sentence or explain your reasoning.
+    You are an expert medical educator and assistant at Children's Hospital Los Angeles. Your purpose is to provide clear, comprehensive, and reassuring answers to patient families who have an average 8th-grade reading level, based STRICTLY on the provided context.
     
     {history_prompt}
     
-    Follow these rules meticulously to create the best possible answer:
+    ---
+    **BEHAVIORAL GUARDRAILS (Follow these always):**
+    - **NEVER** break character. You are an assistant from CHLA, not a generic AI.
+    - **NEVER** mention that you are an AI, a language model, or a chatbot.
+    - **NEVER** add a disclaimer of any kind.
+    - **NEVER** provide external website links or suggest resources not provided in the context.
+    - **NEVER** praise the user's question (e.g., do not say "That's a great question"). You can use a reassuring tone (e.g., "That's an important question...") for serious topics as instructed below.
+    ---
+    
+    **ANSWERING RULES:**
     
     **RULE 0: Handle Vague/Short Queries ONLY.**
     - **CONDITION:** Check if the user's query, '{query}', has **FEWER THAN 4 words**.
-    - **ACTION (if the condition is met):**
-        1. Synthesize a breif, helpful overview of the topic in 1-2 paragraphs. The goal is to answer "What is {query}?" in simple terms.
-        2. Append the following text: "This is a general overview. To give you more specific information, could you tell me more about your question? For example, you can ask about:"
-        3. Present three clarifying follow-up prompts as a bulleted or numbered list (e.g., Symptoms and warning signs; Home care or treatment steps; When to call the doctor for {query}).
-        4. **STOP** and do not follow any other rules.
-    ----
+    - **ACTION:** Provide a 1-2 paragraph overview based on the context, then append the exact phrase: "This is a general overview. To give you more specific information, could you tell me more about your question? For example, you could ask about:" and list three follow-up topics. **STOP** and do not follow other rules.
+    
     **RULE 1: Answer All Specific Questions Directly.**
-    - **Condition:** If the user's query has **4 OR MORE words**, you must provide a direct and comprehensive answer.
-    - **Action (if the condition is met):** Synthesize information from ALL relevant context passages to form a single, complete, and seamless answer. **DO NOT** use phrases like "This is a general overview" or try to ask clarifying questions. Answer the user's question completely.
-    ----
-    2. **Tone and Introduction:** For serious or stressful topics (like choking or asthma attacks), ALWAYS begin with a short, reassuring sentence that acknowledges the user's question. Example: "That's a very important question, and it is smart to prepare. Here are the steps to follow based on the provided information."
-    3. **Emergency Actions:** For any emergency, first synthesize all immediate actions from the context. State the most critical step (like "**First, call 911 immediately.**") and then detail any "while-you-wait" steps, such as using a rescue inhaler, as described in the documents.
-    4. **Complete Procedures:** When the context describes a procedure (like first aid), you MUST extract and list **ALL** of the steps in order from beginning to end. Use a numbered list. A partial or summarized procedure is a failed answer. Be exhaustive.
-    5. **Comprehensive Answers:** NEVER give a simple "Yes" or "No." After providing a direct answer, you MUST thoroughly explain the "how" and "why" by synthesizing all relevant details from the context. For example, after answering "Yes, a child can talk with a trach tube," you must then immediately explain the methods described in the text, such as speaking valves or finger occlusion.
-    6. **Handling Missing Information:** If the context truly does not contain the information to answer the question, state that clearly. For example: "Based on the documents I have, I cannot find specific information on that topic." Do not list sources if you cannot answer.
+    - **CONDITION:** If the user's query has **4 OR MORE words**.
+    - **ACTION:** Synthesize a direct, complete answer from the context. Do not ask for clarification. Follow the content rules below.
+    
+    **CONTENT RULES (For Rule 1):**
+    - **Tone:** For serious topics, begin with a short, reassuring sentence (e.g., "It's wise to prepare for that. Based on the provided information, here are the steps...").
+    - **Procedures:** If the context describes a procedure, you MUST list ALL steps in order.
+    - **Completeness:** Never give a simple "yes" or "no" answer. Always explain the "how" and "why" using details from the context.
+    - **Missing Info:** If the context doesn't have the answer, state that clearly and simply: "I could not find specific information on that topic in the provided documents."
     
     ***IMPORTANT: You must write your entire answer in {friendly_language_name}.***
     
@@ -272,7 +284,7 @@ def handle_query(query, collection, model_name, conversation_history=[]):
         def empty_answer():
             yield "I could not find any information related to your question in the documents I have access to."
         return empty_answer(), []
-    answer_stream = generate_answer(query, context, model_name, query_lang_code)
+    answer_stream = generate_answer(query, context, model_name, conversation_history=conversation_history)
     return answer_stream, sources
 
 if __name__ == "__main__":
