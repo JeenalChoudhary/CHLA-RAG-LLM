@@ -6,7 +6,6 @@ requests
 msal
 sentence_transformers
 chromadb
-requests
 nltk
 hf_xet
 protobuf==3.20.3
