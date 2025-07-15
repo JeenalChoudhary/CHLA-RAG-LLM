@@ -27,8 +27,8 @@ RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
-INITIAL_RETRIEVAL_COUNT = 25
-FINAL_CONTEXT_COUNT = 7
+INITIAL_RETRIEVAL_COUNT = 50
+FINAL_CONTEXT_COUNT = 8
 
 _embedding_models = {}
 _llm_models = {}
@@ -46,8 +46,9 @@ except LookupError:
 def clean_pdf_text(text):
     text = re.sub(r"Children's\s+Hospital\s+LOS ANGELES", "", text, flags=re.IGNORECASE)
     text = re.sub(r".*4650 Sunset Blvd\., Los Angeles, CA 90027.*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"© 2000-2027 The StayWell Company, LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"This information is not intended as a substitute for professional medical care.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://\S+|www\.\S+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"©\s*\d{4}.*LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"Disclaimer:.*|This information is not intended as a substitute for professional medical care.*|This information is intended for general knowledge.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'\s*\n\s*', '\n', text)
     text = re.sub(r' {2,}', ' ', text)
     return text
@@ -150,7 +151,7 @@ def generate_hypothetical_document(query, conversation_history="",model_name="ge
         {conversation_history}
         ---
         """
-    if word_count < 5 and not is_question:
+    if word_count < 4 and not is_question:
         prompt = f"""
         You are a medical writer creating a hypothetical document for a database search.
         {history_prompt_section}
