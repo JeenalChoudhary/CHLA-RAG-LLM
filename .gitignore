@@ -1,20 +1,34 @@
 # .gitignore
+
+# Environment variables
 .env
 *.env
 
+# Python bytecode and cache
 __pycache__/
 *.pyc
 *.pyo
-*pyd
+*.pyd
 
+# Python virtual environments (including pyenv's .venv if used for project-local venvs)
 venv/
 env/
 virtual/
 .venv/
 
-.idea/
-.vscode/
-*.swp
+# IDE specific files
+.idea/      # PyCharm/IntelliJ
+.vscode/    # VS Code
+*.swp       # Vim swap files
 
+# Backend generated data (ChromaDB and processing cache)
 db/
-.python_packages
+cache/
+*.log       # General log files
+
+# Python package specific files
+.python_packages # Azure Functions specific
+
+# Node.js / React Frontend generated files and dependencies
+frontend/node_modules/ # All installed npm packages for the frontend
+frontend/dist/         # The compiled production build of the React app
