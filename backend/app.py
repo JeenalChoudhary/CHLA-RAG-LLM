@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
-from backend_code import backend_rag as main
+import backend_rag as main
 import logging
 import chromadb
 import json # Ensure json is imported for dumps
