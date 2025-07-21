@@ -1,79 +1,20 @@
+/* src/index.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Natural butterfly flutter animation */
-@keyframes butterfly-flutter {
-  0%, 100% {
-     transform: rotateX(0deg) rotateY(0deg);
-  }
-  50% {
-     transform: rotateX(-2deg) rotateY(-3deg);
-  }
+/* Ensure full height for the application */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Prevent body scroll, allow chat area to scroll */
+  font-family: 'Inter', sans-serif; /* Apply the Inter font globally */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@keyframes wing-flutter-upper-left {
-  0%, 100% {
-     transform: rotateZ(0deg);
-  }
-  50% {
-     transform: rotateZ(-8deg);
-  }
-}
-
-@keyframes wing-flutter-upper-right {
-  0%, 100% {
-     transform: rotateZ(0deg);
-  }
-  50% {
-     transform: rotateZ(8deg);
-  }
-}
-
-@keyframes wing-flutter-lower-left {
-  0%, 100% {
-     transform: rotateZ(0deg);
-  }
-  50% {
-     transform: rotateZ(5deg);
-  }
-}
-
-@keyframes wing-flutter-lower-right {
-  0%, 100% {
-     transform: rotateZ(0deg);
-  }
-  50% {
-     transform: rotateZ(-5deg);
-  }
-}
-
-/* Apply animations to butterfly wings */
-.butterfly-wing-upper-left {
-  animation: wing-flutter-upper-left 3.5s ease-in-out infinite;
-  transform-origin: -3px 0px;
-}
-.butterfly-wing-upper-right {
-  animation: wing-flutter-upper-right 3.5s ease-in-out infinite;
-  transform-origin: 3px 0px;
-}
-.butterfly-wing-lower-left {
-  animation: wing-flutter-lower-left 3.5s ease-in-out infinite;
-  animation-delay: 0.1s;
-  transform-origin: -3px 0px;
-}
-.butterfly-wing-lower-right {
-  animation: wing-flutter-lower-right 3.5s ease-in-out infinite;
-  animation-delay: 0.1s;
-  transform-origin: 3px 0px;
-}
-
-/* Subtle body movement */
-@keyframes body-sway {
-  0%, 100% {
-     transform: translateY(0px);
-  }
-  50% {
-     transform: translateY(-1px);
-  }
+/* Basic background for the entire page */
+body {
+  background-color: #f0f2f5; /* Light grey background */
 }
