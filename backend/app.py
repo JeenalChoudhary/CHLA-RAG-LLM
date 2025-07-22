@@ -17,8 +17,6 @@ main.initialize_backend_components()
 @app.route('/health', methods=['GET'])
 def health_check():
     """Endpoint for health checks."""
-    # You can add more detailed health checks here, e.g., if ChromaDB is reachable
-    # and if models are loaded. For now, a simple status is fine.
     return jsonify({"status": "healthy", "message": "Backend is running."}), 200
 
 @app.route('/chat', methods=['GET'])
@@ -57,4 +55,4 @@ def document_count():
         return jsonify({"count": 0, "error": "Collection not initialized"}), 503
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000) # Run on port 5000
+    app.run(debug=True, port=5000)
