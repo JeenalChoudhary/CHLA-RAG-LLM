@@ -2,7 +2,7 @@ import os
 import re
 import fitz
 import chromadb
-from sentence_transformers import SentenceTransformer, CrossEncoder
+from sentence_transformers import SentenceTransformer, CrossEncoder, util
 import torch
 import logging
 import json
@@ -28,9 +28,9 @@ RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 LLM_MODEL_NAME = "gemma3:1b-it-qat"
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
-INITIAL_RETRIEVAL_COUNT = 15
+INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.5
+RERANKER_SCORE_THRESHOLD = 0.1
 
 _embedding_models = None
 _llm_models = None
@@ -58,7 +58,7 @@ def initialize_backend_components():
     if _reranker_model is None:
         logging.info(f"Loading reranker model: {RERANKER_MODEL_NAME}")
         _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, max_length=512, device=device)
-    if _llm_models is None: 
+    if _llm_models is None:
         logging.info(f"Loading Ollama LLM model: {LLM_MODEL_NAME}")
         _llm_models = Ollama(model=LLM_MODEL_NAME, request_timeout=300.0)
     if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
@@ -97,7 +97,7 @@ def load_and_process_docs(directory):
     logging.info(f"Found {len(pdf_files)} PDF files in '{directory}'.")
     for filename in pdf_files:
         path = os.path.join(directory, filename)
-        logging.info(f"Processing PDF: '{path}'")
+        logging.info(f"Processing PDF: '{filename}'")
         try:
             doc = fitz.open(path)
             full_text = "".join(page.get_text() for page in doc)
@@ -139,35 +139,46 @@ def load_and_process_docs(directory):
     logging.info(f"Successfully processed {len(os.listdir(directory))} PDFs into {len(all_chunks)} chunks.")
     return all_chunks
 
-def generate_hypothetical_document(query: str) -> str:
+def generate_hypothetical_document(query: str, conversation_history: str) -> list:
+    history_prompt = ""
+    if conversation_history:
+        history_prompt = f"""
+        <conversation_history>
+        {conversation_history}
+        </conversation_history>
+        """
     prompt = f"""
-        You are a research assistant. Your task is to break down the following user query into 3 to 5 specific, self-contained questions that can be used to search a medical knowledge base.
-        
-        User Query: '{query}'
-        
-        Generate a JSON list of questions. For example: ['question 1', 'question 2', 'question 3']\
-        
-        JSON list of questions:
+        You are an expert query analyst. Your task is to refine a user's query based on conversation history and then break it down into 3-5 specific, self-contained questions for a medical knowledge base search.
+
+        {history_prompt}
+
+        **Instructions:**
+        1.  **Analyze the Query:** If the query is a follow-up (e.g., "what about for kids?"), use the history to create a clear, standalone query first.
+        2.  **Generate Varied Questions:** From the full query, create a JSON list of questions that explore different angles.
+
+        **User Query:** '{query}'
+
+        Generate a JSON list of questions based on your analysis. For example: ['question 1', 'question 2', 'question 3']
+
+        **JSON list of questions:**
     """
     response = _llm_models.complete(prompt)
     response_text = response.text.strip()
-    if response_text.startswith("```json"):
-        response_text = response_text[7:]
-    if response_text.endswith("```"):
-        response_text = response_text[:-3]
+    if "```json" in response_text:
+        response_text = response_text.split("```json")[1].split("```")[0]
     try:
         sub_questions = json.loads(response_text)
         logging.info(f"Successfully generated sub-questions: {sub_questions}")
         return sub_questions
     except json.JSONDecodeError:
         logging.error(f"Failed to decode the sub questions: {response.text}")
-        return query
+        return [query]
 
-def retrieve_context(query: str, n_results: int = FINAL_CONTEXT_COUNT):
+def retrieve_context(query: str, conversation_history: str = "", n_results: int = FINAL_CONTEXT_COUNT):
     logging.info(f"Retrieving context for query: '{query}'")
-    sub_queries = generate_hypothetical_document(query)
+    sub_queries = generate_hypothetical_document(query, conversation_history=conversation_history)
     all_queries = [query] + sub_queries
-    retrieved_doc_set = {} 
+    retrieved_doc_set = {}
     logging.info(f"Performing multi-query retrieval for {all_queries}")
     for sub_q in all_queries:
         query_embedding = _embedding_models.encode(sub_q).tolist()
@@ -177,7 +188,7 @@ def retrieve_context(query: str, n_results: int = FINAL_CONTEXT_COUNT):
                 retrieved_doc_set[doc_content] = results['metadatas'][0][i]
         if not retrieved_doc_set:
             logging.warning(f"Multi-query retrieval returned no relevant documents for reranking.")
-            return "", []
+            return [], []
     retrieved_docs = list(retrieved_doc_set.keys())
     retrieved_metadata = list(retrieved_doc_set.values())
     logging.info(f"Retrieved {len(retrieved_docs)} documents for reranking.")
@@ -186,71 +197,70 @@ def retrieve_context(query: str, n_results: int = FINAL_CONTEXT_COUNT):
     sorted_docs = sorted(zip(scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
     if not sorted_docs or sorted_docs[0][0] < RERANKER_SCORE_THRESHOLD:
         logging.warning(f"Reranker returned no sufficiently relevant documents. The top relevance score was {sorted_docs[0][0] if sorted_docs else 'N/A'}. Aborting generation.")
-        return "", []
+        return [], []
     top_reranked_docs = sorted_docs[:n_results]
     final_docs = [doc for score, doc, meta in top_reranked_docs]
     final_metadata = [meta for score, doc, meta in top_reranked_docs]
-    context = "\n\n---\n\n".join(final_docs)
     sources = sorted(list(set(meta['source'] for meta in final_metadata)))
     logging.info(f"Reranked and selected top {len(final_docs)} documents.")
     logging.info(f"Retrieved final context from sources: {sources}")
-    return context, sources        
-    
+    return final_docs, sources
+   
 def generate_answer_stream(query: str, context_docs: list, conversation_history: str):
     context = "\n\n---\n\n".join(context_docs)
-    word_count = len(query.split())
-    if word_count < 5:
-        prompt_template = f"""
-        You are a medical educator at Children's Hospital Los Angeles. Based on the context below, provide a 1-2 paragraph general overview of the topic "{query}".
-        Then, you MUST append the following phrase exactly: "This is a general overview. To give you more specific information, could you tell me more about your question? For example, you could ask about:" and then list three relevant follow-up questions based on the context.
-        
-        Context:
-        {context}
-        
-        Answer:
+    history_prompt = ""
+    if conversation_history:
+        history_prompt = f"""
+        <conversation_history>
+        {conversation_history}
+        </conversation_history>
         """
-    else:
-        history_prompt = ""
-        if conversation_history:
-            history_prompt = f"""
-            Here is the recent conversation history. Use it to understand the context of the user's latest question, if relevant:
-            ---
-            {conversation_history}
-            ---
-            """
-        prompt_template = f"""
-        **Your Single Most Important Rule:** You are an assistant for Children's Hospital Los Angeles. Your entire response MUST be generated directly and exclusively from the information contained in the "CONTEXT" section below. Do not use any outside knowledge.
-        **CRITICAL SCENARIO:** If the provided "CONTEXT" does not contain information to answer the user's question, you MUST respond with ONLY the following exact phrase:
-        "I could not find specific information on that topic in the provided documents."
-        Do not apologize, do not add a disclaimer, do not explain any further. Simply provide that exact sentence.
-        
-        {history_prompt}
-        
-        **BEHAVIORAL GUARDRAILS (Follow these always):**
-        - NEVER break character.
-        - NEVER mention you are an AI, a language model, or a chatbot.
-        - NEVER add a disclaimer of any kind.
-        - NEVER provide external website links or suggest resources not mentioned in the CONTEXT.
-        
-        **FORMATTING RULES:**
-        - **Simple Language:** Write for an average 8th-grade reading level. Explain complex terms simply.
-        - **Use Lists:** When explaining steps or listing reasons, use bullet points (`-`) or numbered lists for clarity.
-        - **Use Bolding:** Use bolding (`**Bolded Text**`) for headings or key terms to make the answer easy to scan.
-        
-        ---
-        CONTEXT:
-        {context}
-        ---
-        
-        Question: {query}
-        
-        Answer:
-        """
+    prompt_template = f"""
+    **Persona:** You are a helpful and reassuring medical educator at Children's Hospital Los Angeles. Your language should be simple, clear, and empathetic, designed for worried or concerned parents.
+   
+    **YOUR SINGLE MOST IMPORTANT RULE:** You MUST generate your entire response using ONLY the information from the "CONTEXT" section below.
+    - **DO NOT** use any outside knowledge.
+    - **DO NOT** invent information, URLs, or web links. If you see a URL in the CONTEXT, you may use it. Otherwise, NEVER create one.
+    - **DO NOT** include a disclaimer about being an AI or not being a medical professional. Your persona is a medical educator at CHLA.
+    - **If the Context is empty or does not contain relevant information to answer the question, you MUST ONLY reply with the exact phrase:** "I could not find any information related to your question in the documents I have access to."
+   
+    **Instructions:**
+    1. Analyze the user's "Question" and the provided "CONTEXT".
+    2. Synthesize the information from the CONTEXT into a clear answer. Use lists and bolding to make the information easy to digest.
+    3. If the user's query is too broad (e.g., "asthma", "breathing problems"), provide a general overview and then suggest 2-3 specific follow-up questions to guide the user.
+   
+    ---
+    CONTEXT:
+    {context}
+    ---
+    {history_prompt}
+    Question: {query}
+   
+    Answer:
+    """
     logging.info(f"Sending final prompt to LLM to query: '{query}'")
-    logging.info(f"--- FINAL PROMPT ---\n{prompt_template}\n--- END PROMPT ---")
     response_iter = _llm_models.stream_complete(prompt_template)
     for token in response_iter:
         yield token.delta
+
+def deduplicate_context(documents: list, similarity_threshold: float = 0.95) -> list:
+    if not documents:
+        return []
+    
+    logging.info(f"Starting de-duplication on {len(documents)} documents with {similarity_threshold}...")
+    embeddings = _embedding_models.encode(documents, convert_to_tensor=True, show_progress_bar=False)
+    cosine_scores = util.cos_sim(embeddings, embeddings)
+    unique_docs = []
+    is_duplicate = [False] * len(documents)
+    
+    for i in range(len(documents)):
+        if not is_duplicate[i]:
+            unique_docs.append(documents[i])
+            for j in range(i + 1, len(documents)):
+                if cosine_scores[i][j] > similarity_threshold:
+                    is_duplicate[j] = True
+    logging.info(f"De-duplication complete. Reduced from {len(documents)} to {len(unique_docs)} documents.")
+    return unique_docs
 
 def handle_query_stream(query: str, chat_history: list):
     global _collection
@@ -260,13 +270,22 @@ def handle_query_stream(query: str, chat_history: list):
         yield 'sources', []
         return
     logging.info(f"Handling streamed query: {query}")
-    history_str = "\n".join([f"{'User' if msg.get('isUser') else 'Assistant'}:{msg.get('text')}" for msg in chat_history])
+    cleaned_history = []
+    for msg in chat_history:
+        role = 'User' if msg.get('isUser') else 'Assistant'
+        text = msg.get('text', '')
+        if not msg.get('isUser'):
+            text = text.split('**Sources:**')[0].strip()
+        if text:
+            cleaned_history.append(f"{role}: {text}")
+    history_str = "\n".join(cleaned_history)
     try:
-        context_docs, sources = retrieve_context(query)
+        context_docs, sources = retrieve_context(query, history_str)
         if not context_docs:
             yield 'text', "I couldn't find relevant information for your question in my knowledge base. Please try rephrasing your query."
             yield 'sources', []
             return
+        deduplicated_docs = deduplicate_context(context_docs)
         answer_generator = generate_answer_stream(query, context_docs, history_str)
         for token in answer_generator:
             yield 'text', token

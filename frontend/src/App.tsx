@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import chlaLogo from '/image copy.png'; // Assuming the logo is in the public folder
+import chlaLogo from './assets/image_copy.png';
 
 // Define the structure for a message
 interface Message {
@@ -13,8 +13,10 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [documentCount, setDocumentCount] = useState<number | null>(null); // State for document count
+  const [documentCount, setDocumentCount] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const [activeQuery, setActiveQuery] = useState<{ query: string; history: any[] } | null>(null); 
 
   // Scroll to the latest message
   const scrollToBottom = () => {
@@ -29,7 +31,7 @@ export default function App() {
   useEffect(() => {
     setMessages([
       {
-        id: 1,
+        id: Date.now(),
         text: "Hello! I'm here to help answer your medical questions and provide health information. Please remember that I'm not a substitute for professional medical advice, diagnosis, or treatment. How can I assist you today?",
         sender: 'assistant',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -47,62 +49,107 @@ export default function App() {
         setDocumentCount(data.count);
       } catch (error) {
         console.error('Error fetching document count:', error);
-        setDocumentCount(0); // Set to 0 or some error indicator on failure
+        setDocumentCount(0);
       }
     };
 
     fetchDocumentCount();
-  }, []); // Empty dependency array means this runs once on mount
+  }, []);
+
+    useEffect(() => {
+    if (!activeQuery) {
+      return;
+    }
+    const { query, history } = activeQuery;
+    const historyParam = encodeURIComponent(JSON.stringify(history));
+    const queryParam = encodeURIComponent(query);
+    const eventSourceUrl = `http://127.0.0.1:5000/chat?query=${queryParam}&history=${historyParam}`;
+    const eventSource = new EventSource(eventSourceUrl);
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.text) {
+        setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+          const lastMessage = newMessages[newMessages.length - 1]
+          const updatedMessage = {
+            ...lastMessage,
+            text: lastMessage.text + data.text,
+          };
+          newMessages[newMessages.length - 1] = updatedMessage;
+          return newMessages;
+        });
+      } else if (data.sources) {
+        setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+            const lastMessage = newMessages[newMessages.length - 1];
+            const sourcesText = "\n\n**Sources:**\n" + data.sources.map((s: string) => `- ${s.replace(/_/g, " ").replace(".pdf", "")}`).join("\n");
+            const updatedMessage = {
+                ...lastMessage,
+                text: lastMessage.text + sourcesText,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            };
+            newMessages[newMessages.length - 1] = updatedMessage;
+            return newMessages;
+        });
+        setIsLoading(false);
+        eventSource.close();
+      } else if (data.error) {
+         setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+          newMessages[newMessages.length - 1].text = data.error;
+          newMessages[newMessages.length - 1].timestamp = new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+          return newMessages;
+        });
+        setIsLoading(false);
+        eventSource.close();
+      }
+    };
+    eventSource.onerror = (err) => {
+      console.error('EventSource failed:', err);
+       setMessages((prevMessages) => {
+          const newMessages = [...prevMessages];
+          const lastMessage = newMessages[newMessages.length - 1];
+          if (lastMessage && lastMessage.text === '') {
+              lastMessage.text = "An error occurred while fetching the response. Please check the server logs.";
+              lastMessage.timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          }
+          return newMessages;
+      });
+      setIsLoading(false);
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.close();
+      setActiveQuery(null);
+    };
+
+  }, [activeQuery]);
+
 
   const sendMessage = async () => {
     if (input.trim() === '') return;
 
     const newUserMessage: Message = {
-      id: messages.length + 1,
+      id: Date.now(),
       text: input,
       sender: 'user',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMessages((prevMessages) => [...prevMessages, newUserMessage]);
+    const historyForBackend = messages.map(msg => ({
+      text: msg.text,
+      isUser: msg.sender == "user",
+    }));
+    setMessages((prevMessages) => [
+      ...prevMessages,
+      newUserMessage,
+      {id: Date.now() + 1, text: '', sender: 'assistant', timestamp: ''},
+    ]);
+    setActiveQuery({query: input, history: historyForBackend});
     setInput('');
     setIsLoading(true);
-
-    try {
-      const response = await fetch('http://127.0.0.1:5000/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query: newUserMessage.text }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const assistantResponse: Message = {
-        id: messages.length + 2,
-        text: data.response || "I'm sorry, I couldn't process that request.",
-        sender: 'assistant',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prevMessages) => [...prevMessages, assistantResponse]);
-    } catch (error) {
-      console.error('Error sending message:', error);
-      setMessages((prevMessages) => [
-        ...prevMessages,
-        {
-          id: messages.length + 2,
-          text: 'An error occurred while fetching the response. Please try again.',
-          sender: 'assistant',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const handleKeyPress = (event: React.KeyboardEvent<HTMLInputElement>) => {
