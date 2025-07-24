@@ -12,8 +12,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 app = Flask(__name__)
 CORS(app)
 
+PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:5000").rstrip('/')
+
 # Define the directory where your PDF documents are stored
-# IMPORTANT: Adjust this path if your documents are in a different location relative to app.py
 DOCUMENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'docs')
 
 # Ensure the documents directory exists
@@ -30,7 +31,6 @@ def health_check():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    # Expect JSON body from frontend
     data = request.json
     user_query = data.get('query')
     conversation_history = data.get('history', []) 
@@ -50,12 +50,9 @@ def chat():
             if chunk_type == 'text' and content:
                 yield f"data: {json.dumps({'text': content})}\n\n"
             elif chunk_type == 'sources':
-                # For sources, create a list of objects with filename and download URL
-                # Assuming 'content' here is a list of filenames (e.g., ['file1.pdf', 'file2.pdf'])
                 sources_with_links = []
                 for filename in content:
-                    # Construct the full URL for downloading the source
-                    download_url = f"{request.url_root.rstrip('/')}/download_source/{filename}"
+                    download_url = f"{PUBLIC_API_URL}/download_source/{filename}"
                     sources_with_links.append({'filename': filename, 'url': download_url})
                 yield f"data: {json.dumps({'sources': sources_with_links})}\n\n"
             elif chunk_type == 'error':
@@ -79,7 +76,6 @@ def download_source(filename):
     Ensures that only files within the DOCUMENTS_DIR can be accessed.
     """
     try:
-        # Prevent directory traversal attacks by using safe_join
         return send_from_directory(DOCUMENTS_DIR, filename, as_attachment=True)
     except FileNotFoundError:
         logging.error(f"File not found for download: {filename} in {DOCUMENTS_DIR}")
@@ -90,4 +86,3 @@ def download_source(filename):
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
-

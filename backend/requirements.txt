@@ -1,17 +1,12 @@
-PyMuPDF
-numpy<2.0
-torch
-requests
-msal
-sentence_transformers
-chromadb
-nltk
-hf_xet
-protobuf==3.20.3
-llama-index-core
-llama-index-llms-ollama
-llama-index-embeddings-huggingface
-llama-index-vector-stores-chroma
-llama-index-readers-file
+torch==2.3.1 --index-url https://download.pytorch.org/whl/cu118
 Flask
 flask-cors
+gunicorn
+sentence_transformers
+chromadb
+PyMuPDF
+nltk
+llama-index-llms-ollama
+numpy<2.0
+protobuf==3.20.3
+requests

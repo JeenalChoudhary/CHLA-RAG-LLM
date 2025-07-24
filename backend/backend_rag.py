@@ -21,6 +21,7 @@ PDF_DIRECTORY = os.path.join(DATA_DIRECTORY, "docs")
 DB_PATH = os.path.join(DATA_DIRECTORY, "db")
 CACHE_DIR = os.path.join(DATA_DIRECTORY, "cache")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = "NeuML/pubmedbert-base-embeddings"
@@ -60,7 +61,7 @@ def initialize_backend_components():
         _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, max_length=512, device=device)
     if _llm_models is None:
         logging.info(f"Loading Ollama LLM model: {LLM_MODEL_NAME}")
-        _llm_models = Ollama(model=LLM_MODEL_NAME, request_timeout=300.0)
+        _llm_models = Ollama(model=LLM_MODEL_NAME, host=OLLAMA_HOST, request_timeout=300.0)
     if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
         logging.error(f"Database not found or is empty at '{DB_PATH}'")
         logging.info("Please run 'python backend/backend_rag.py --rebuild' to create the database.")
@@ -246,13 +247,11 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
 def deduplicate_context(documents: list, similarity_threshold: float = 0.95) -> list:
     if not documents:
         return []
-    
     logging.info(f"Starting de-duplication on {len(documents)} documents with {similarity_threshold}...")
     embeddings = _embedding_models.encode(documents, convert_to_tensor=True, show_progress_bar=False)
     cosine_scores = util.cos_sim(embeddings, embeddings)
     unique_docs = []
     is_duplicate = [False] * len(documents)
-    
     for i in range(len(documents)):
         if not is_duplicate[i]:
             unique_docs.append(documents[i])
