@@ -2,9 +2,9 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+COPY ./ollama /usr/local/bin/ollama
 
-RUN curl -fsSL https://ollama.com/install.sh | sh
+RUN chmod +x /usr/local/bin/ollama
 
 COPY entrypoint.sh /entrypoint.sh
 
