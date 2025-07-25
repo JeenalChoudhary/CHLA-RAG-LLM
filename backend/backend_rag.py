@@ -82,30 +82,33 @@ def clean_pdf_text(text: str) -> str:
     text = re.sub(r"https?://\S+|www\.\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"©\s*\d{4}.*LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"Disclaimer:.*|This information is not intended as a substitute for professional medical care.*|This information is intended for general knowledge.*", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    # text = re.sub(r"\s*\n\s*", "\n", text).strip()
     text = re.sub(r" {2,}", " ", text)
     return text
 
 # ---- Document Processing Functions ----
 def load_and_process_docs(directory):
     all_chunks = []
-    processed_pdf_count = 0
     if not os.path.exists(directory):
         logging.error(f"PDF directory not found: {directory}")
         return all_chunks
-    pdf_files = [f for f in os.listdir(directory) if f.lower().endswith('.pdf')]
-    logging.info(f"Found {len(pdf_files)} PDF files in '{directory}'.")
-    for filename in pdf_files:
+    
+    for filename in os.listdir(directory):
+        if not filename.endswith(".pdf"):
+            continue
+        
         path = os.path.join(directory, filename)
         logging.info(f"Processing PDF: '{filename}'")
         try:
             doc = fitz.open(path)
             full_text = "".join(page.get_text() for page in doc)
             doc.close()
+            
             cleaned_text = clean_pdf_text(full_text)
             if not cleaned_text:
                 logging.warning(f"No content left in {filename} after cleaning. Skipping file.")
                 continue
+            
             sentences = nltk.sent_tokenize(cleaned_text)
             logging.info(f"Extracting {len(sentences)} sentences from {filename}.")
             if len(sentences) < SENTENCES_PER_CHUNK:
@@ -132,7 +135,13 @@ def load_and_process_docs(directory):
                             "metadata": {"source": filename, "start_sentence_index": last_chunk_start}
                         })
                 logging.info(f"Created {len(all_chunks) - initial_chunk_count} chunks for {filename}.")
-            processed_pdf_count += 1
+            # paragraphs = cleaned_text.split("\n\n")
+            # for i, para in enumerate(paragraphs):
+            #     if para.strip():
+            #         all_chunks.append({
+            #             "content": para.strip(),
+            #             "metadata": {"source": filename, "paragraph_index": i+1}
+            #         })
         except Exception as e:
             logging.error(f"Failed to process {filename}: {e}", exc_info=True)
     logging.info(f"---- Document Processing Complete ----")
@@ -318,7 +327,7 @@ if __name__ == "__main__":
             embedding_model_build = SentenceTransformer(EMBEDDING_MODEL_NAMES, device=device)
             client_build = chromadb.PersistentClient(path=DB_PATH)
             collection_build = client_build.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space":"cosine"})
-            batch_size = 256
+            batch_size = 64
             total_batches = (len(chunks) + batch_size - 1) // batch_size
             logging.info(f"Embedding {len(chunks)} chunks in {total_batches} batches...")
             for i in range(0, len(chunks), batch_size):
@@ -327,7 +336,7 @@ if __name__ == "__main__":
                 batch = chunks[i:i + batch_size]
                 contents = [doc['content'] for doc in batch]
                 metadatas = [doc['metadata'] for doc in batch]
-                ids = [f"{doc['metadata']['source']}_chunk_{doc['metadata']['start_sentence_index']}" for doc in batch]
+                ids = [f"{doc['metadata']['source']}_chunk_{doc['metadata']['paragraph_index']}" for doc in batch]
                 embeddings = embedding_model_build.encode(contents, show_progress_bar=False).tolist()
                 collection_build.add(embeddings=embeddings, documents=contents, metadatas=metadatas, ids=ids)
             logging.info(f"---- Rebuild complete! ----")
