@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/
 
 COPY requirements.txt .
 
-RUN pip3 install --no-cache-dir --timeout=600 -r requirements.txt
+RUN pip3 install --no-cache-dir --timeout=3600 -r requirements.txt
 
 COPY . .
 

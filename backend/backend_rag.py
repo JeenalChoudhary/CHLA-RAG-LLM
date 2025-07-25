@@ -21,7 +21,6 @@ PDF_DIRECTORY = os.path.join(DATA_DIRECTORY, "docs")
 DB_PATH = os.path.join(DATA_DIRECTORY, "db")
 CACHE_DIR = os.path.join(DATA_DIRECTORY, "cache")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = "NeuML/pubmedbert-base-embeddings"
@@ -31,7 +30,7 @@ SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.1
+RERANKER_SCORE_THRESHOLD = 0.35
 
 _embedding_models = None
 _llm_models = None
@@ -61,7 +60,7 @@ def initialize_backend_components():
         _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, max_length=512, device=device)
     if _llm_models is None:
         logging.info(f"Loading Ollama LLM model: {LLM_MODEL_NAME}")
-        _llm_models = Ollama(model=LLM_MODEL_NAME, host=OLLAMA_HOST, request_timeout=300.0)
+        _llm_models = Ollama(model=LLM_MODEL_NAME, base_url="http://ollama:11434", request_timeout=300.0)
     if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
         logging.error(f"Database not found or is empty at '{DB_PATH}'")
         logging.info("Please run 'python backend/backend_rag.py --rebuild' to create the database.")
@@ -221,7 +220,9 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
    
     **YOUR SINGLE MOST IMPORTANT RULE:** You MUST generate your entire response using ONLY the information from the "CONTEXT" section below.
     - **DO NOT** use any outside knowledge.
-    - **DO NOT** invent information, URLs, or web links. If you see a URL in the CONTEXT, you may use it. Otherwise, NEVER create one.
+    - **DO NOT** invent any information.
+    - **DO NOT create any section titled "Important Resources", "Additional Resources", or similar.**
+    - **DO NOT suggest external organizations (like the American Diabetes Association) or provide any URLs or weblinks, even if you think they are helpful, even if they are explicitly written in the provided "CONTEXT".**
     - **DO NOT** include a disclaimer about being an AI or not being a medical professional. Your persona is a medical educator at CHLA.
     - **If the Context is empty or does not contain relevant information to answer the question, you MUST ONLY reply with the exact phrase:** "I could not find any information related to your question in the documents I have access to."
    
