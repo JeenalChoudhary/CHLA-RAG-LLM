@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 const chlaLogo = new URL('./assets/image_copy.png', import.meta.url).href;
-const API_URL = (import.meta as any).env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = '';
 
 interface Message {
   id: number;
@@ -11,13 +11,10 @@ interface Message {
 
 const renderMarkdown = (markdownText: string) => {
   let htmlText = markdownText;
-
   htmlText = htmlText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-
   const lines = htmlText.split('\n');
   let inList = false;
   let processedLines: string[] = [];
-
   for (const line of lines) {
     if (line.trim().startsWith('* ')) {
       if (!inList) {
@@ -37,18 +34,12 @@ const renderMarkdown = (markdownText: string) => {
     processedLines.push('</ul>');
   }
   htmlText = processedLines.join('\n');
-
   // Convert Markdown links [text](url) into HTML <a> tags
   htmlText = htmlText.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">$1</a>');
-
-
   // Replace single newlines with <br> for line breaks within paragraphs, but not within ul/li or a tags
   htmlText = htmlText.replace(/\n(?!<ul|<\/ul>|<li>|<a)/g, '<br/>');
-
-
   return { __html: htmlText };
 };
-
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -56,11 +47,9 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [documentCount, setDocumentCount] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
   const [conversationHistory, setConversationHistory] = useState<
     { role: string; content: string }[]
   >([]);
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -68,7 +57,6 @@ export default function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
-
   useEffect(() => {
     setMessages([
       {
@@ -78,7 +66,6 @@ export default function App() {
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       },
     ]);
-
     const fetchDocumentCount = async () => {
       try {
         const response = await fetch(`${API_URL}/document_count`);
@@ -92,25 +79,28 @@ export default function App() {
         setDocumentCount(0); 
       }
     };
-
     fetchDocumentCount();
   }, []);
 
   const sendMessage = async () => {
     if (input.trim() === '') return;
-
     const newUserMessage: Message = {
       id: messages.length + 1,
       text: input,
       sender: 'user',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-
     setMessages((prevMessages) => [...prevMessages, newUserMessage]);
-    setConversationHistory((prevHistory) => [...prevHistory, { role: 'user', content: newUserMessage.text },]);
+
+    const currentHistory = [...conversationHistory, { role: 'user', content: newUserMessage.text}];
+    const MAX_HISTORY_TURNS = 5;
+    let historyForRequest = currentHistory
+    if (historyForRequest.length > MAX_HISTORY_TURNS * 2) {
+      historyForRequest = historyForRequest.slice(-MAX_HISTORY_TURNS * 2);  
+    }
+    setConversationHistory(currentHistory);
     setInput('');
     setIsLoading(true);
-
     let assistantResponseText = '';
     const newAssistantMessage: Message = {
       id: messages.length + 2,
@@ -118,9 +108,7 @@ export default function App() {
       sender: 'assistant',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
-
     setMessages((prevMessages) => [...prevMessages, newAssistantMessage]);
-
     try {
       const response = await fetch(`${API_URL}/chat`, {
         method: 'POST',
@@ -132,43 +120,32 @@ export default function App() {
           history: conversationHistory,
         }),
       });
-
       if (!response.ok || !response.body) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
-
       let errorOccurredInStream = false;
       let sourcesReceived: { filename: string; url: string }[] = [];
-
       const processStream = async () => {
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
           const chunk = decoder.decode(value, { stream: true });
           const lines = chunk.split('\n\n').filter(line => line.startsWith('data: '));
-
           for (const line of lines) {
             try {
               const jsonString = line.substring(6);
               const data = JSON.parse(jsonString);
-
               if (data.text) {
                 assistantResponseText += data.text;
                 setMessages((prevMessages) =>
                   prevMessages.map((msg, index) =>
                     index === prevMessages.length - 1
-                      ? {
-                          ...msg,
+                      ? {...msg,
                           text: assistantResponseText +
-                            (sourcesReceived.length > 0
-                              ? `\n\n**Sources:**\n${sourcesReceived.map(s => `- [${s.filename}](${s.url})`).join('\n')}`
-                              : '')
-                        }
-                      : msg
+                            (sourcesReceived.length > 0 ? `\n\n**Sources:**\n${sourcesReceived.map(s => `- [${s.filename}](${s.url})`).join('\n')}`: '')
+                        }: msg
                   )
                 );
               } else if (data.sources) {

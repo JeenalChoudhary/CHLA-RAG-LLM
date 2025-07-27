@@ -1,20 +1,18 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from flask import Flask, request, jsonify, Response, stream_with_context, send_from_directory # Added send_from_directory
+from flask import Flask, request, jsonify, Response, stream_with_context, send_from_directory
 from flask_cors import CORS
 import backend_rag as main
 import logging
 import json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-app = Flask(__name__)
+STATIC_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
 CORS(app)
 
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:5000").rstrip('/')
-
-# Define the directory where your PDF documents are stored
 DOCUMENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'docs')
 
 # Ensure the documents directory exists
@@ -22,7 +20,7 @@ if not os.path.exists(DOCUMENTS_DIR):
     logging.error(f"Documents directory not found: {DOCUMENTS_DIR}. Please ensure your PDF files are in this location.")
     # You might want to handle this more gracefully or exit if critical
 
-main.initialize_backend_components()
+# main.initialize_backend_components()
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -84,5 +82,16 @@ def download_source(filename):
         logging.error(f"Error serving file {filename}: {e}")
         return jsonify({"error": "Could not serve file"}), 500
 
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve_spa(path):
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    index_path = os.path.join(app.static_folder, 'index.html')
+    if not os.path.exists(index_path):
+        return jsonify({"error":"Index.html not found in static assets."}), 404
+    return send_from_directory(app.static_folder, 'index.html')
+
 if __name__ == '__main__':
+    main.initialize_backend_components()
     app.run(debug=True, port=5000)

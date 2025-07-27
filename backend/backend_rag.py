@@ -2,11 +2,13 @@ import os
 import re
 import fitz
 import chromadb
+from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer, CrossEncoder, util
 import torch
 import logging
 import json
 import nltk
+import time
 import argparse
 import shutil
 from llama_index.llms.ollama import Ollama
@@ -23,14 +25,14 @@ CACHE_DIR = os.path.join(DATA_DIRECTORY, "cache")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 
 COLLECTION_NAME = "example_health_docs"
-EMBEDDING_MODEL_NAMES = "NeuML/pubmedbert-base-embeddings"
+EMBEDDING_MODEL_NAMES = "BAAI/bge-large-en-v1.5"
 RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 LLM_MODEL_NAME = "gemma3:1b-it-qat"
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.35
+RERANKER_SCORE_THRESHOLD = 0.3
 
 _embedding_models = None
 _llm_models = None
@@ -44,6 +46,7 @@ try:
 except LookupError:
     logging.info("Downloading NLTK 'punkt' tokenizer...")
     nltk.download('punkt', quiet=True)
+    nltk.download('punkt_tab', quiet=True)
     logging.info("NLTK 'punkt' downloaded.")
 
 # --- Add a function to initialize models and client once ---
@@ -60,14 +63,14 @@ def initialize_backend_components():
         _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, max_length=512, device=device)
     if _llm_models is None:
         logging.info(f"Loading Ollama LLM model: {LLM_MODEL_NAME}")
-        _llm_models = Ollama(model=LLM_MODEL_NAME, base_url="http://ollama:11434", request_timeout=300.0)
+        _llm_models = Ollama(model=LLM_MODEL_NAME, base_url="http://ollama:11434", request_timeout=600.0)
     if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
         logging.error(f"Database not found or is empty at '{DB_PATH}'")
         logging.info("Please run 'python backend/backend_rag.py --rebuild' to create the database.")
         return
     if _chroma_client is None:
         logging.info(f"Connecting to ChromaDB at: {DB_PATH}")
-        _chroma_client = chromadb.PersistentClient(path=DB_PATH)
+        _chroma_client = chromadb.PersistentClient(path=DB_PATH, settings=Settings(allow_reset=True, is_persistent=True, anonymized_telemetry=False))
     try:
         _collection = _chroma_client.get_collection(name=COLLECTION_NAME)
         logging.info(f"Sucessfully loaded ChromaDB collection '{COLLECTION_NAME}'. Document count: {_collection.count()}")
@@ -82,7 +85,8 @@ def clean_pdf_text(text: str) -> str:
     text = re.sub(r"https?://\S+|www\.\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"©\s*\d{4}.*LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"Disclaimer:.*|This information is not intended as a substitute for professional medical care.*|This information is intended for general knowledge.*", "", text, flags=re.DOTALL | re.IGNORECASE)
-    # text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    text = re.sub(r"\s*\n\s*", "\n", text).strip()
+    text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" {2,}", " ", text)
     return text
 
@@ -135,13 +139,6 @@ def load_and_process_docs(directory):
                             "metadata": {"source": filename, "start_sentence_index": last_chunk_start}
                         })
                 logging.info(f"Created {len(all_chunks) - initial_chunk_count} chunks for {filename}.")
-            # paragraphs = cleaned_text.split("\n\n")
-            # for i, para in enumerate(paragraphs):
-            #     if para.strip():
-            #         all_chunks.append({
-            #             "content": para.strip(),
-            #             "metadata": {"source": filename, "paragraph_index": i+1}
-            #         })
         except Exception as e:
             logging.error(f"Failed to process {filename}: {e}", exc_info=True)
     logging.info(f"---- Document Processing Complete ----")
@@ -225,15 +222,15 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
         </conversation_history>
         """
     prompt_template = f"""
-    **Persona:** You are a helpful and reassuring medical educator at Children's Hospital Los Angeles. Your language should be simple, clear, and empathetic, designed for worried or concerned parents.
+    **Persona:** You are an expert medical educator at Children's Hospital Los Angeles. Your mission is to provide helpful, reassuring, and empathetic guidance to worried parents and patients. Your language MUST be simple and clear.
    
-    **YOUR SINGLE MOST IMPORTANT RULE:** You MUST generate your entire response using ONLY the information from the "CONTEXT" section below.
-    - **DO NOT** use any outside knowledge.
-    - **DO NOT** invent any information.
-    - **DO NOT create any section titled "Important Resources", "Additional Resources", or similar.**
-    - **DO NOT suggest external organizations (like the American Diabetes Association) or provide any URLs or weblinks, even if you think they are helpful, even if they are explicitly written in the provided "CONTEXT".**
-    - **DO NOT** include a disclaimer about being an AI or not being a medical professional. Your persona is a medical educator at CHLA.
-    - **If the Context is empty or does not contain relevant information to answer the question, you MUST ONLY reply with the exact phrase:** "I could not find any information related to your question in the documents I have access to."
+    **--- YOUR MOST IMPORTANT RULES ---**
+    1. **USE ONLY THE PROVIDED CONTEXT.** Your entire response MUST be generated using ONLY the information from the "CONTEXT" section below. Do not use any outside knowledge.
+    2. **NO EXTERNAL INFORMATION OR LINKS.** Under NO circumstances will you suggest external organizations, provide URLs, or mention websites (e.g., "chla.org").
+    3. **NO DISCLAIMERS.** Under NO circumstances will you include a disclaimer about not being a medical professional or that the information is not medical advice.
+    4. **NO UNSUPPORTIVE OR BIZARRE ADVICE.** Do not invent information or stitch together text in a way that creates nonsensical, unhelpful, or dangerous advice. All information must be grounded and coherent.
+    5. **STICK TO THE PERSONA.** You are a medical educator at CHLA. Do not break character.
+    6. **HANDLE EMPTY CONTEXT.** If the "CONTEXT" section is empty or irrelevant, you MUST ONLY reply with the exact phrase: "I could not find any information related to your question in the documents I have access to."
    
     **Instructions:**
     1. Analyze the user's "Question" and the provided "CONTEXT".
@@ -254,7 +251,7 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
     for token in response_iter:
         yield token.delta
 
-def deduplicate_context(documents: list, similarity_threshold: float = 0.95) -> list:
+def deduplicate_context(documents: list, similarity_threshold: float = 0.92) -> list:
     if not documents:
         return []
     logging.info(f"Starting de-duplication on {len(documents)} documents with {similarity_threshold}...")
@@ -270,6 +267,15 @@ def deduplicate_context(documents: list, similarity_threshold: float = 0.95) -> 
                     is_duplicate[j] = True
     logging.info(f"De-duplication complete. Reduced from {len(documents)} to {len(unique_docs)} documents.")
     return unique_docs
+
+def parse_and_clean_output(text: str) -> str:
+    logging.info("Applying post-processing parser to final output.")
+    text = re.sub(r"https?://\S+|www\.\S+|\S+\.(com|org|net)\S*", "", text, flags=re.IGNORECASE)
+    disclaimer_patterns = [r"this information is for information purposes only.*", r"consult a medical professional.*", r"this is not medical advice.*", r"important note:.*", r"disclaimer:.*"]
+    for pattern in disclaimer_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"\*\*?(important resources|additional resources|resources)\*\*?:?", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
 def handle_query_stream(query: str, chat_history: list):
     global _collection
@@ -295,9 +301,12 @@ def handle_query_stream(query: str, chat_history: list):
             yield 'sources', []
             return
         deduplicated_docs = deduplicate_context(context_docs)
-        answer_generator = generate_answer_stream(query, context_docs, history_str)
-        for token in answer_generator:
-            yield 'text', token
+        answer_generator = generate_answer_stream(query, deduplicated_docs, history_str)
+        full_response_text = "".join([token for token in answer_generator])
+        cleaned_response = parse_and_clean_output(full_response_text)
+        for word in cleaned_response.split():
+            yield 'text', word + " "
+            time.sleep(0.02)
         yield 'sources', sources
     except Exception as e:
         logging.error(f"An error occurred while handling the query: {e}", exc_info=True)
@@ -321,13 +330,12 @@ if __name__ == "__main__":
         if not chunks:
             logging.error(f"No chunks were created from the PDFs. Aborting database build.")
         else:
-            initialize_backend_components()
             logging.info("Initializing components for database rebuild...")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             embedding_model_build = SentenceTransformer(EMBEDDING_MODEL_NAMES, device=device)
-            client_build = chromadb.PersistentClient(path=DB_PATH)
+            client_build = chromadb.PersistentClient(path=DB_PATH, settings=Settings(allow_reset=True, is_persistent=True, anonymized_telemetry=False))
             collection_build = client_build.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space":"cosine"})
-            batch_size = 64
+            batch_size = 128
             total_batches = (len(chunks) + batch_size - 1) // batch_size
             logging.info(f"Embedding {len(chunks)} chunks in {total_batches} batches...")
             for i in range(0, len(chunks), batch_size):
@@ -336,7 +344,7 @@ if __name__ == "__main__":
                 batch = chunks[i:i + batch_size]
                 contents = [doc['content'] for doc in batch]
                 metadatas = [doc['metadata'] for doc in batch]
-                ids = [f"{doc['metadata']['source']}_chunk_{doc['metadata']['paragraph_index']}" for doc in batch]
+                ids = [f"{doc['metadata']['source']}_chunk_{doc['metadata']['start_sentence_index']}" for doc in batch]
                 embeddings = embedding_model_build.encode(contents, show_progress_bar=False).tolist()
                 collection_build.add(embeddings=embeddings, documents=contents, metadatas=metadatas, ids=ids)
             logging.info(f"---- Rebuild complete! ----")
