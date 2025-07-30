@@ -25,7 +25,7 @@ CACHE_DIR = os.path.join(DATA_DIRECTORY, "cache")
 PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 
 COLLECTION_NAME = "example_health_docs"
-EMBEDDING_MODEL_NAMES = "BAAI/bge-large-en-v1.5"
+EMBEDDING_MODEL_NAMES = "BAAI/bge-m3"
 RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
 LLM_MODEL_NAME = "gemma3:1b-it-qat"
 SENTENCES_PER_CHUNK = 6
@@ -44,10 +44,9 @@ _collection = None
 try:
     nltk.data.find('tokenizer/punkt')
 except LookupError:
-    logging.info("Downloading NLTK 'punkt' tokenizer...")
-    nltk.download('punkt', quiet=True)
-    nltk.download('punkt_tab', quiet=True)
-    logging.info("NLTK 'punkt' downloaded.")
+    logging.info("Downloading NLTK 'punkt' and 'punkt_tab'tokenizer...")
+    nltk.download(['punkt', 'punkt_tab'])
+    logging.info("NLTK 'punkt' and 'punkt_tab' downloaded.")
 
 # --- Add a function to initialize models and client once ---
 def initialize_backend_components():
@@ -154,24 +153,26 @@ def generate_hypothetical_document(query: str, conversation_history: str) -> lis
         </conversation_history>
         """
     prompt = f"""
-        You are an expert query analyst. Your task is to refine a user's query based on conversation history and then break it down into 3-5 specific, self-contained questions for a medical knowledge base search.
+        You are an expert query analyst. Your primary task is to understand the user's query, use the conversation history to reduce any ambiguity, and then generate a list of specific, self-contained questions for a medical knowledge base search.
 
         {history_prompt}
 
-        **Instructions:**
-        1.  **Analyze the Query:** If the query is a follow-up (e.g., "what about for kids?"), use the history to create a clear, standalone query first.
-        2.  **Generate Varied Questions:** From the full query, create a JSON list of questions that explore different angles.
+        **--- YOUR MOST IMPORTANT INSTRUCTIONS ---**
+        1.  **Resolve Ambiguity First:** Analyze the "User Query" in the context of the "conversation_history". If the query is a follow-up (e.g., "What about for kids?", "What are the risks?"), you MUST first rewrite it as a complete, standalone question. For example, if the "conversation_history" is about Tonsillectomy and the query is "What are the risks?", the rewritten query would be "What are the risks of a tonsillectomy?".
+        2.  **Generate Varied Questions:** Based on the complete, standalone query, generate a JSON list of 3-5 questions that explore different facets of the topic. These questions should be precise and aimed at finding specific facts in a medical patient education document.
 
         **User Query:** '{query}'
 
-        Generate a JSON list of questions based on your analysis. For example: ['question 1', 'question 2', 'question 3']
-
+        **Output Format:** Provide only a single JSON list of strings. For example: ["question 1", "question 2", "question 3"]
         **JSON list of questions:**
     """
     response = _llm_models.complete(prompt)
     response_text = response.text.strip()
-    if "```json" in response_text:
-        response_text = response_text.split("```json")[1].split("```")[0]
+    if "```" in response_text:
+        json_start = response_text.find("[")
+        json_end = response_text.rfind("]")
+        if json_start != -1 and json_end != -1:
+            response_text = response_text[json_start:json_end+1]
     try:
         sub_questions = json.loads(response_text)
         logging.info(f"Successfully generated sub-questions: {sub_questions}")
@@ -222,20 +223,21 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
         </conversation_history>
         """
     prompt_template = f"""
-    **Persona:** You are an expert medical educator at Children's Hospital Los Angeles. Your mission is to provide helpful, reassuring, and empathetic guidance to worried parents and patients. Your language MUST be simple and clear.
+    **Persona:** You are an expert medical educator at Children's Hospital Los Angeles. Your mission is to provide helpful, reassuring, and empathetic guidance to worried parents and patients. Your language MUST be simple, clear, and easy to understand.
    
     **--- YOUR MOST IMPORTANT RULES ---**
-    1. **USE ONLY THE PROVIDED CONTEXT.** Your entire response MUST be generated using ONLY the information from the "CONTEXT" section below. Do not use any outside knowledge.
-    2. **NO EXTERNAL INFORMATION OR LINKS.** Under NO circumstances will you suggest external organizations, provide URLs, or mention websites (e.g., "chla.org").
-    3. **NO DISCLAIMERS.** Under NO circumstances will you include a disclaimer about not being a medical professional or that the information is not medical advice.
-    4. **NO UNSUPPORTIVE OR BIZARRE ADVICE.** Do not invent information or stitch together text in a way that creates nonsensical, unhelpful, or dangerous advice. All information must be grounded and coherent.
-    5. **STICK TO THE PERSONA.** You are a medical educator at CHLA. Do not break character.
-    6. **HANDLE EMPTY CONTEXT.** If the "CONTEXT" section is empty or irrelevant, you MUST ONLY reply with the exact phrase: "I could not find any information related to your question in the documents I have access to."
+    1. **Strictly Adhere to Provided Context:** Your entire response MUST be generated using ONLY the information from the "CONTEXT" section below. Do not use any outside knowledge.
+    2. **IGNORE IRRELEVANT CONTEXT:** This is critical. If a piece of information in the CONTEXT is not directly relevant to the user's specific "Question", you MUST ignore it. It is better to provide a shorter, accurate answer than a longer one containing irrelevant or potentially confusing details. For example, if the user asks about tonsillectomy pain, do not include information about spine surgery, even if it appears in the context.
+    3. **Synthesize, Don't Confuse:** Combine the relevant facts from the CONTEXT into a single, cohesive, and logical answer. Do not present conflicting information without explaining the nuance. If different documents provide different details (e.g., for different age groups), be precise about which detail applies to which situation.
+    4. **No External Information or Links:** Under NO circumstances will you suggest external organizations, provide URLs, or mention websites (e.g., "chla.org).
+    5. **No Disclaimers:** Under NO circumstances will you include a disclaimer about not being a medical professional or that the information is not medical advice.
+    6. **Hhandle Empty Context:** If the "CONTEXT" section is empty or clearly irrelevant to the question, you MUST ONLY reply with the exact phrase: "I could not find any information related to your question in the documents I have access to."
    
     **Instructions:**
     1. Analyze the user's "Question" and the provided "CONTEXT".
-    2. Synthesize the information from the CONTEXT into a clear answer. Use lists and bolding to make the information easy to digest.
-    3. If the user's query is too broad (e.g., "asthma", "breathing problems"), provide a general overview and then suggest 2-3 specific follow-up questions to guide the user.
+    2. Filter out any context that is not directly relevant to the question.
+    3. Synthesize the remaining, relevant information into a clear, helpful answer. Use lists and bolding to make the information easy to digest.
+    4. If the user's query is too broad (e.g., "asthma", "breathing problems") or less than 4 words, provide a general overview and then suggest 2-3 specific follow-up questions to guide the user. For example, if the user query is "Heart disease", ask questions pertaining to understanding symptoms, understanding treatment, and understanding care of a loved one with Heart disease.x 
    
     ---
     CONTEXT:
@@ -277,6 +279,33 @@ def parse_and_clean_output(text: str) -> str:
     text = re.sub(r"\*\*?(important resources|additional resources|resources)\*\*?:?", "", text, flags=re.IGNORECASE)
     return text.strip()
 
+def is_context_relevant(query: str, context_docs: list) -> bool:
+    if not context_docs:
+        return False
+    context = "\n\n---\n\n".join(context_docs)
+    prompt = f"""
+    You are a relevance-checking AI. Your task is to determine if the provided CONTEXT contains information that can directly answer the user's QUESTION.
+    Read the user's QUESTION and the CONTEXT below.
+    Your answer MUST be a single word: either "yes" or "no".
+    
+    ---
+    CONTEXT:
+    {context}
+    ---
+    QUESTION: {query}
+    ---
+    
+    Can the CONTEXT be used to directly answer the QUESTION? Answer with only "yes" or "no".
+    """
+    try:
+        response = _llm_models.complete(prompt)
+        answer = response.text.strip().lower()
+        logging.info(f"Relevance check for query '{query}'. LLM Answered: '{answer}'")
+        return "yes" in answer
+    except Exception as e:
+        logging.error(f"Relevance check failed: {e}")
+        return False
+
 def handle_query_stream(query: str, chat_history: list):
     global _collection
     if _collection is None:
@@ -288,15 +317,17 @@ def handle_query_stream(query: str, chat_history: list):
     cleaned_history = []
     for msg in chat_history:
         role = 'User' if msg.get('isUser') else 'Assistant'
-        text = msg.get('text', '')
-        if not msg.get('isUser'):
-            text = text.split('**Sources:**')[0].strip()
-        if text:
-            cleaned_history.append(f"{role}: {text}")
+        content = msg.get('content', '')
+        if role == "Assistant":
+            content = content.split('**Sources:**')[0].strip()
+        if content:
+            formatted_role = 'User' if role == 'User' else 'Assistant'
+            cleaned_history.append(f"{formatted_role}: {content}")  
     history_str = "\n".join(cleaned_history)
     try:
         context_docs, sources = retrieve_context(query, history_str)
-        if not context_docs:
+        if not is_context_relevant(query, context_docs):
+            logging.warning(f"Context deemed irrelevant by LLM for query '{query}'. Aborting generation.")
             yield 'text', "I couldn't find relevant information for your question in my knowledge base. Please try rephrasing your query."
             yield 'sources', []
             return
