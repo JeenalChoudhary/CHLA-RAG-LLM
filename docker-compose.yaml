@@ -46,6 +46,7 @@ services:
     restart: unless-stopped
     environment:
       - OLLAMA_HOST=http://ollama:11434
+      - PUBLIC_API_URL=http://localhost:8080
     networks:
     - chla_net
     depends_on:

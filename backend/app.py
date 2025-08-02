@@ -44,18 +44,22 @@ def chat():
     
     def generate():
         response_generator = main.handle_query_stream(user_query, conversation_history)
+        full_text_for_history = ""
+        sources_for_history = []
         for chunk_type, content in response_generator:
             if chunk_type == 'text' and content:
+                full_text_for_history += content
                 yield f"data: {json.dumps({'text': content})}\n\n"
             elif chunk_type == 'sources':
                 sources_with_links = []
                 for filename in content:
                     download_url = f"{PUBLIC_API_URL}/download_source/{filename}"
                     sources_with_links.append({'filename': filename, 'url': download_url})
+                sources_for_history = sources_with_links
                 yield f"data: {json.dumps({'sources': sources_with_links})}\n\n"
             elif chunk_type == 'error':
                 yield f"data: {json.dumps({'error': content})}\n\n"
-    
+
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 @app.route('/document_count', methods=['GET'])

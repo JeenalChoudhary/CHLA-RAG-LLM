@@ -6,9 +6,7 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer, CrossEncoder, util
 import torch
 import logging
-import json
 import nltk
-import time
 import argparse
 import shutil
 from llama_index.llms.ollama import Ollama
@@ -32,7 +30,7 @@ SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.3
+RERANKER_SCORE_THRESHOLD = 0.1
 
 _embedding_models = None
 _llm_models = None
@@ -62,7 +60,9 @@ def initialize_backend_components():
         _reranker_model = CrossEncoder(RERANKER_MODEL_NAME, max_length=512, device=device)
     if _llm_models is None:
         logging.info(f"Loading Ollama LLM model: {LLM_MODEL_NAME}")
-        _llm_models = Ollama(model=LLM_MODEL_NAME, base_url="http://ollama:11434", request_timeout=600.0)
+        ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        logging.info(f"Connecting to Ollama at: {ollama_host}")
+        _llm_models = Ollama(model=LLM_MODEL_NAME, base_url=ollama_host, request_timeout=600.0)
     if not os.path.exists(DB_PATH) or not os.listdir(DB_PATH):
         logging.error(f"Database not found or is empty at '{DB_PATH}'")
         logging.info("Please run 'python backend/backend_rag.py --rebuild' to create the database.")
@@ -95,23 +95,19 @@ def load_and_process_docs(directory):
     if not os.path.exists(directory):
         logging.error(f"PDF directory not found: {directory}")
         return all_chunks
-    
     for filename in os.listdir(directory):
         if not filename.endswith(".pdf"):
             continue
-        
         path = os.path.join(directory, filename)
         logging.info(f"Processing PDF: '{filename}'")
         try:
             doc = fitz.open(path)
             full_text = "".join(page.get_text() for page in doc)
             doc.close()
-            
             cleaned_text = clean_pdf_text(full_text)
             if not cleaned_text:
                 logging.warning(f"No content left in {filename} after cleaning. Skipping file.")
                 continue
-            
             sentences = nltk.sent_tokenize(cleaned_text)
             logging.info(f"Extracting {len(sentences)} sentences from {filename}.")
             if len(sentences) < SENTENCES_PER_CHUNK:
@@ -144,47 +140,87 @@ def load_and_process_docs(directory):
     logging.info(f"Successfully processed {len(os.listdir(directory))} PDFs into {len(all_chunks)} chunks.")
     return all_chunks
 
-def generate_hypothetical_document(query: str, conversation_history: str) -> list:
-    history_prompt = ""
-    if conversation_history:
-        history_prompt = f"""
-        <conversation_history>
-        {conversation_history}
-        </conversation_history>
-        """
+def generate_hypothetical_document(query: str) -> list:
     prompt = f"""
-        You are an expert query analyst. Your primary task is to understand the user's query, use the conversation history to reduce any ambiguity, and then generate a list of specific, self-contained questions for a medical knowledge base search.
-
-        {history_prompt}
-
-        **--- YOUR MOST IMPORTANT INSTRUCTIONS ---**
-        1.  **Resolve Ambiguity First:** Analyze the "User Query" in the context of the "conversation_history". If the query is a follow-up (e.g., "What about for kids?", "What are the risks?"), you MUST first rewrite it as a complete, standalone question. For example, if the "conversation_history" is about Tonsillectomy and the query is "What are the risks?", the rewritten query would be "What are the risks of a tonsillectomy?".
-        2.  **Generate Varied Questions:** Based on the complete, standalone query, generate a JSON list of 3-5 questions that explore different facets of the topic. These questions should be precise and aimed at finding specific facts in a medical patient education document.
-
-        **User Query:** '{query}'
-
-        **Output Format:** Provide only a single JSON list of strings. For example: ["question 1", "question 2", "question 3"]
-        **JSON list of questions:**
+    You are a query generation AI. Your task is to create a JSON list of 5 diverse, alternative versions of the given user question.
+    The goal is to rephrase the question in different ways to maximize the chance of finding relevant documents in a vector database.
+    Each variation should be a complete, standalone question.
+    
+    **User Question:**
+    {query}
+    
+    **Output Format:** Provide a single, valid JSON list of strings.
+    **JSON list of questions:**
     """
     response = _llm_models.complete(prompt)
     response_text = response.text.strip()
-    if "```" in response_text:
-        json_start = response_text.find("[")
-        json_end = response_text.rfind("]")
-        if json_start != -1 and json_end != -1:
-            response_text = response_text[json_start:json_end+1]
     try:
-        sub_questions = json.loads(response_text)
-        logging.info(f"Successfully generated sub-questions: {sub_questions}")
-        return sub_questions
-    except json.JSONDecodeError:
-        logging.error(f"Failed to decode the sub questions: {response.text}")
-        return [query]
+        sub_questions = re.findall(r'"(.*?)"', response_text)
+        if sub_questions:
+            logging.info(f"Successfully generated sub-questions: {sub_questions}")
+            return sub_questions
+        else:
+            logging.warning("Regex found no questions. Falling back to the original user query.")
+            return []
+    except Exception as e:
+        logging.error(f"Failed to parse the questions with Regex: {e}. Raw text: {response_text}")
+        return []
+    
+def extract_topic_from_history(conversation_history: str) -> str:
+    if not conversation_history.strip():
+        return ""
+    prompt = f"""
+    You are an expert topic extraction AI. Your task is to analyze the conversation history and identify the main medical subject.
+    The topic should be a concise noun phrase, like "tonsillectomy recovery for adults" or "managing fever after surgery".
+    
+    **CRITICAL RULE: Focus ONLY on the conversation exchange between the "User" and "Assistant". You MUST IGNORE "Sources:" lists or PDF filenames mentioned in the history.**
+    
+    **Instructions:**
+    1. Read the dialogue to understand the overall context.
+    2. Pay the most attention to the **most recent user question**, as it often refines or changes the topic.
+    3. Identify the core medical condition, procedure, or symptom being discussed.
+    4. Your response must ONLY be the topic itself. Do not add any preamble or explanation.
+    
+    <conversation_history>
+    {conversation_history}
+    </conversation_history>
+    
+    **Main Topic:**
+    """
+    try:
+        logging.info("Extracting topic from history...")
+        response = _llm_models.complete(prompt)
+        topic = response.text.strip()
+        if topic:
+            logging.info(f"Topic extracted: {topic}")
+            return topic
+        else:
+            logging.warning("Topic extraction failed. Returning an empty string")
+            return ""
+    except Exception as e:
+        logging.error(f"Failed to extract topic: {e}")
+        return ""
+
+def contextualize_query(query: str, conversation_history: list) -> str:
+    if not conversation_history:
+        return query
+    topic = extract_topic_from_history(conversation_history)
+    if topic:
+        if topic.lower() in query.lower():
+            logging.info("Topic already found in query. Using original query.")
+            rewritten_query = query
+        else:
+            rewritten_query = f"Regarding {topic}, {query}"
+        logging.info(f"Rewritten query: {rewritten_query}")
+        return rewritten_query
+    else:
+        logging.warning("No topic extracted. Using original query.")
+        return query
 
 def retrieve_context(query: str, conversation_history: str = "", n_results: int = FINAL_CONTEXT_COUNT):
     logging.info(f"Retrieving context for query: '{query}'")
-    sub_queries = generate_hypothetical_document(query, conversation_history=conversation_history)
-    all_queries = [query] + sub_queries
+    contextualized_query = contextualize_query(query, conversation_history)
+    all_queries = [contextualized_query] + generate_hypothetical_document(contextualized_query)
     retrieved_doc_set = {}
     logging.info(f"Performing multi-query retrieval for {all_queries}")
     for sub_q in all_queries:
@@ -199,13 +235,17 @@ def retrieve_context(query: str, conversation_history: str = "", n_results: int 
     retrieved_docs = list(retrieved_doc_set.keys())
     retrieved_metadata = list(retrieved_doc_set.values())
     logging.info(f"Retrieved {len(retrieved_docs)} documents for reranking.")
+    logging.info(f"Reranking documents against the query: '{contextualized_query}'")
     rerank_pairs = [[query, doc] for doc in retrieved_docs]
     scores = _reranker_model.predict(rerank_pairs, show_progress_bar=False)
     sorted_docs = sorted(zip(scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
-    if not sorted_docs or sorted_docs[0][0] < RERANKER_SCORE_THRESHOLD:
-        logging.warning(f"Reranker returned no sufficiently relevant documents. The top relevance score was {sorted_docs[0][0] if sorted_docs else 'N/A'}. Aborting generation.")
-        return [], []
-    top_reranked_docs = sorted_docs[:n_results]
+    FALLBACK_SCORE_COUNT = 5
+    top_fallback_docs = sorted_docs[:FALLBACK_SCORE_COUNT]
+    fallback_sources = sorted(list(set(meta['source'] for meta in top_fallback_docs)))
+    top_reranked_docs = [doc for doc in sorted_docs if doc[0] >= RERANKER_SCORE_THRESHOLD][:n_results]
+    if not top_reranked_docs:
+        logging.warning(f"No documents met the relevance threshold of {RERANKER_SCORE_THRESHOLD}. Top score: {sorted_docs[0][0]} from the document '{sorted_docs[0][1]}'. Aborting generation and falling back.")
+        return [], fallback_sources
     final_docs = [doc for score, doc, meta in top_reranked_docs]
     final_metadata = [meta for score, doc, meta in top_reranked_docs]
     sources = sorted(list(set(meta['source'] for meta in final_metadata)))
@@ -226,19 +266,18 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
     **Persona:** You are an expert medical educator at Children's Hospital Los Angeles. Your mission is to provide helpful, reassuring, and empathetic guidance to worried parents and patients. Your language MUST be simple, clear, and easy to understand.
    
     **--- YOUR MOST IMPORTANT RULES ---**
-    1. **Strictly Adhere to Provided Context:** Your entire response MUST be generated using ONLY the information from the "CONTEXT" section below. Do not use any outside knowledge.
-    2. **IGNORE IRRELEVANT CONTEXT:** This is critical. If a piece of information in the CONTEXT is not directly relevant to the user's specific "Question", you MUST ignore it. It is better to provide a shorter, accurate answer than a longer one containing irrelevant or potentially confusing details. For example, if the user asks about tonsillectomy pain, do not include information about spine surgery, even if it appears in the context.
-    3. **Synthesize, Don't Confuse:** Combine the relevant facts from the CONTEXT into a single, cohesive, and logical answer. Do not present conflicting information without explaining the nuance. If different documents provide different details (e.g., for different age groups), be precise about which detail applies to which situation.
-    4. **No External Information or Links:** Under NO circumstances will you suggest external organizations, provide URLs, or mention websites (e.g., "chla.org).
-    5. **No Disclaimers:** Under NO circumstances will you include a disclaimer about not being a medical professional or that the information is not medical advice.
-    6. **Hhandle Empty Context:** If the "CONTEXT" section is empty or clearly irrelevant to the question, you MUST ONLY reply with the exact phrase: "I could not find any information related to your question in the documents I have access to."
-   
-    **Instructions:**
-    1. Analyze the user's "Question" and the provided "CONTEXT".
-    2. Filter out any context that is not directly relevant to the question.
-    3. Synthesize the remaining, relevant information into a clear, helpful answer. Use lists and bolding to make the information easy to digest.
-    4. If the user's query is too broad (e.g., "asthma", "breathing problems") or less than 4 words, provide a general overview and then suggest 2-3 specific follow-up questions to guide the user. For example, if the user query is "Heart disease", ask questions pertaining to understanding symptoms, understanding treatment, and understanding care of a loved one with Heart disease.x 
-   
+    1. **Context is Your Only Source:** Your entire response MUST be generated using ONLY the information from the `CONTEXT` section below. Do not use any outside knowledge.
+    
+    2. **Precision is Key:** Pay close attention to keywords and details in the user's `Question` (like age, e.g., 'child' or 'teen'). Your answer must be tailored to these specifics. If the context has information for both adults and children, only provide the information relevant to the user's query.
+    
+    3. **Be a Helpful Filter:** If a piece of information in the `CONTEXT` is not directly relevant to the user's specific `Question`, you MUST ignore it. A short, accurate answer is better than a long, confusing one.
+    
+    4. **Synthesize, Don't Just List:** Combine the relevant facts from the `CONTEXT` into a single, cohesive, and logical answer. Use lists and bolding to make the information easy to digest.
+    
+    5. **Guide the User on Broad Queries:** If the user's `Question` is broad or vague (e.g., "asthma", "heart disease", "diabetes", "belly bug"), provide a brief overview from the context and then suggest 2-3 specific follow-up questions to help guide them.
+    
+    6. **Safety First:** Under NO circumstances will you provide URLs, suggest external websites, or include disclaimers about the information not being medical advice.
+
     ---
     CONTEXT:
     {context}
@@ -309,40 +348,46 @@ def is_context_relevant(query: str, context_docs: list) -> bool:
 def handle_query_stream(query: str, chat_history: list):
     global _collection
     if _collection is None:
-        logging.error(f"Cannot handle query because ChromaDB collection is not initialized.")
-        yield 'error', "The knowledge base is not ready. Please contact support."
-        yield 'sources', []
+        logging.error("Cannot handle query because the ChromaDB collection has not been initialized.")
+        yield "error", "The knowledge base is not ready. Please contact CHLA Support."
+        yield "sources", []
         return
-    logging.info(f"Handling streamed query: {query}")
+    logging.info(f"Handling streamed query: '{query}'")
     cleaned_history = []
     for msg in chat_history:
-        role = 'User' if msg.get('isUser') else 'Assistant'
+        role = "User" if msg.get('isUser') else "Assistant"
         content = msg.get('content', '')
         if role == "Assistant":
             content = content.split('**Sources:**')[0].strip()
         if content:
             formatted_role = 'User' if role == 'User' else 'Assistant'
-            cleaned_history.append(f"{formatted_role}: {content}")  
+            cleaned_history.append(f"{formatted_role}: {content}")
     history_str = "\n".join(cleaned_history)
     try:
         context_docs, sources = retrieve_context(query, history_str)
-        if not is_context_relevant(query, context_docs):
-            logging.warning(f"Context deemed irrelevant by LLM for query '{query}'. Aborting generation.")
-            yield 'text', "I couldn't find relevant information for your question in my knowledge base. Please try rephrasing your query."
-            yield 'sources', []
+        is_relevant = is_context_relevant(query, context_docs)
+        if not context_docs or not is_relevant:
+            if sources:
+                logging.warning(f"No direct context found or context deemed irrelevant for '{query}'. Providing fallback resources: {sources}")
+                fallback_message = "I couldn't find a direct answer to your question in my knowledge base. However, the query returned the following documents which may contain related information. You can review them to see if they are helpful in any way:"
+                yield "text", fallback_message
+                yield "sources", sources
+            else:
+                logging.warning(f"No relevant documents found for query: '{query}'. Aborting generation.")
+                yield 'text', "I couldn't find any information related to your query in my knowledge base. Please try rephrasing your question."
+                yield "sources", []
             return
         deduplicated_docs = deduplicate_context(context_docs)
         answer_generator = generate_answer_stream(query, deduplicated_docs, history_str)
         full_response_text = "".join([token for token in answer_generator])
         cleaned_response = parse_and_clean_output(full_response_text)
-        for word in cleaned_response.split():
-            yield 'text', word + " "
-            time.sleep(0.02)
-        yield 'sources', sources
+        if cleaned_response:
+            yield "text", cleaned_response
+        yield "sources", sources
     except Exception as e:
         logging.error(f"An error occurred while handling the query: {e}", exc_info=True)
-        yield 'error', f"An internal error occurred while generating the response."
-        yield 'sources', []
+        yield "error", "An internal error occurred while generating the response."
+        yield "sources", []
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backend script for the CHLA RAG chatbot. Run with --rebuild to populate the database.")
