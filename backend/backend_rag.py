@@ -30,7 +30,7 @@ SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.1
+RERANKER_SCORE_THRESHOLD = 0.0
 
 _embedding_models = None
 _llm_models = None
@@ -84,6 +84,10 @@ def clean_pdf_text(text: str) -> str:
     text = re.sub(r"https?://\S+|www\.\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"©\s*\d{4}.*LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"Disclaimer:.*|This information is not intended as a substitute for professional medical care.*|This information is intended for general knowledge.*", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'^(.*?)\s*\.{3,}\s*\d+\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'(?im)^\s*(Division of .*|Otolaryngology|Approved by PFE .*)\s*$', '', text)
+    text = re.sub(r'(?im)^\s*page \d+( of \d+)?\s*$', '', text)
+    text = re.sub(r'(?im)^\s*\d+\s*$', '', text)
     text = re.sub(r"\s*\n\s*", "\n", text).strip()
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" {2,}", " ", text)
@@ -166,61 +170,67 @@ def generate_hypothetical_document(query: str) -> list:
         logging.error(f"Failed to parse the questions with Regex: {e}. Raw text: {response_text}")
         return []
     
-def extract_topic_from_history(conversation_history: str) -> str:
+def rewrite_query_with_history(query: str, conversation_history: str) -> str:
     if not conversation_history.strip():
-        return ""
+        logging.info(f"No conversation history detected. Using the original query: '{query}'")
+        return query
     prompt = f"""
-    You are an expert topic extraction AI. Your task is to analyze the conversation history and identify the main medical subject.
-    The topic should be a concise noun phrase, like "tonsillectomy recovery for adults" or "managing fever after surgery".
-    
-    **CRITICAL RULE: Focus ONLY on the conversation exchange between the "User" and "Assistant". You MUST IGNORE "Sources:" lists or PDF filenames mentioned in the history.**
+    You are an expert query rewriting AI. Your task is to rephrase a follow-up question from a user into a clear, self-contained question.
     
     **Instructions:**
-    1. Read the dialogue to understand the overall context.
-    2. Pay the most attention to the **most recent user question**, as it often refines or changes the topic.
-    3. Identify the core medical condition, procedure, or symptom being discussed.
-    4. Your response must ONLY be the topic itself. Do not add any preamble or explanation.
+    1. Analyze the 'Conversation History' to identify the main topic (e.g., 'tracheostomy tube cleaning', 'child's breathing tube').
+    2. The 'Follow-up Question' is often short and relies on context (e.g., using "it", "they", "that").
+    3. You MUST rewrite the 'Follow-up Quesion' to include the specific topic from the history.
+    4. Your output MUST be ONLY the rewritten question and nothing else.
+    
+    -----
+    **Example 1:**
+    <conversation_history>
+    User: What does a breathing tube in the neck do?
+    Assistant: A breathing tube in the neck carries oxygen from the ventilator to the person...
+    </conversation_history>
+    
+    Follow-up Question: "Is it a permanent solution?"
+    Rewritten Standalone Question: "Is a breathing tube in the neck a permanent solution?"
+    -----
+    **Example 2:**
+    <conversation_history>
+    User: I want help with trach tube cleaning and safety.
+    Assistant: Okay, let's talk about trach tube cleaning and safety...
+    </conversation_history>
+    
+    Follow-up Question: "How often does that need to be done?"
+    Rewritten Standalone Question: "How often does tracheostomy tube cleaning need to be done?"
+    -----
+    
+    **CURRENT TASK:**
     
     <conversation_history>
     {conversation_history}
     </conversation_history>
     
-    **Main Topic:**
+    **Follow-up Question:** "{query}"
+    
+    **Rewritten Standalone Question (must be ONLY the rewritten or original question):**
     """
     try:
-        logging.info("Extracting topic from history...")
+        logging.info("Rewriting query based on conversation history...")
         response = _llm_models.complete(prompt)
-        topic = response.text.strip()
-        if topic:
-            logging.info(f"Topic extracted: {topic}")
-            return topic
+        rewritten_query = response.text.strip().strip('"')
+        logging.info(f"Rewritten query: '{rewritten_query}'")
+        if rewritten_query.lower() != query.lower():
+            logging.info(f"Successfully rewrote user query: '{rewritten_query}'")
         else:
-            logging.warning("Topic extraction failed. Returning an empty string")
-            return ""
-    except Exception as e:
-        logging.error(f"Failed to extract topic: {e}")
-        return ""
-
-def contextualize_query(query: str, conversation_history: list) -> str:
-    if not conversation_history:
-        return query
-    topic = extract_topic_from_history(conversation_history)
-    if topic:
-        if topic.lower() in query.lower():
-            logging.info("Topic already found in query. Using original query.")
-            rewritten_query = query
-        else:
-            rewritten_query = f"Regarding {topic}, {query}"
-        logging.info(f"Rewritten query: {rewritten_query}")
+            logging.warning(f"Query was already self-contained. No rewrite needed.")
         return rewritten_query
-    else:
-        logging.warning("No topic extracted. Using original query.")
+    except Exception as e:
+        logging.error(f"Failed to rewrite query: {e}. Using original query.")
         return query
 
 def retrieve_context(query: str, conversation_history: str = "", n_results: int = FINAL_CONTEXT_COUNT):
     logging.info(f"Retrieving context for query: '{query}'")
-    contextualized_query = contextualize_query(query, conversation_history)
-    all_queries = [contextualized_query] + generate_hypothetical_document(contextualized_query)
+    standalone_query = rewrite_query_with_history(query, conversation_history)
+    all_queries = [standalone_query] + generate_hypothetical_document(standalone_query)
     retrieved_doc_set = {}
     logging.info(f"Performing multi-query retrieval for {all_queries}")
     for sub_q in all_queries:
@@ -231,27 +241,29 @@ def retrieve_context(query: str, conversation_history: str = "", n_results: int 
                 retrieved_doc_set[doc_content] = results['metadatas'][0][i]
         if not retrieved_doc_set:
             logging.warning(f"Multi-query retrieval returned no relevant documents for reranking.")
-            return [], []
+            return [], [], standalone_query
     retrieved_docs = list(retrieved_doc_set.keys())
     retrieved_metadata = list(retrieved_doc_set.values())
     logging.info(f"Retrieved {len(retrieved_docs)} documents for reranking.")
-    logging.info(f"Reranking documents against the query: '{contextualized_query}'")
+    logging.info(f"Reranking documents against the query: '{standalone_query}'")
     rerank_pairs = [[query, doc] for doc in retrieved_docs]
     scores = _reranker_model.predict(rerank_pairs, show_progress_bar=False)
     sorted_docs = sorted(zip(scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
+    top_5_scores = [f"{score:.4f}" for score, _, _, in sorted_docs[:5]]
+    logging.info(f"Top 5 reranker scores: {top_5_scores}")
     FALLBACK_SCORE_COUNT = 5
     top_fallback_docs = sorted_docs[:FALLBACK_SCORE_COUNT]
-    fallback_sources = sorted(list(set(meta['source'] for meta in top_fallback_docs)))
+    fallback_sources = sorted(list(set(meta['source'] for socre, doc, meta in top_fallback_docs)))
     top_reranked_docs = [doc for doc in sorted_docs if doc[0] >= RERANKER_SCORE_THRESHOLD][:n_results]
     if not top_reranked_docs:
         logging.warning(f"No documents met the relevance threshold of {RERANKER_SCORE_THRESHOLD}. Top score: {sorted_docs[0][0]} from the document '{sorted_docs[0][1]}'. Aborting generation and falling back.")
-        return [], fallback_sources
+        return [], fallback_sources, standalone_query
     final_docs = [doc for score, doc, meta in top_reranked_docs]
     final_metadata = [meta for score, doc, meta in top_reranked_docs]
     sources = sorted(list(set(meta['source'] for meta in final_metadata)))
     logging.info(f"Reranked and selected top {len(final_docs)} documents.")
     logging.info(f"Retrieved final context from sources: {sources}")
-    return final_docs, sources
+    return final_docs, sources, standalone_query
    
 def generate_answer_stream(query: str, context_docs: list, conversation_history: str):
     context = "\n\n---\n\n".join(context_docs)
@@ -364,8 +376,8 @@ def handle_query_stream(query: str, chat_history: list):
             cleaned_history.append(f"{formatted_role}: {content}")
     history_str = "\n".join(cleaned_history)
     try:
-        context_docs, sources = retrieve_context(query, history_str)
-        is_relevant = is_context_relevant(query, context_docs)
+        context_docs, sources, final_query = retrieve_context(query, history_str)
+        is_relevant = is_context_relevant(final_query, context_docs)
         if not context_docs or not is_relevant:
             if sources:
                 logging.warning(f"No direct context found or context deemed irrelevant for '{query}'. Providing fallback resources: {sources}")
@@ -408,6 +420,7 @@ if __name__ == "__main__":
         else:
             logging.info("Initializing components for database rebuild...")
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            logging.info(f"Rebuild process using device: {device}")
             embedding_model_build = SentenceTransformer(EMBEDDING_MODEL_NAMES, device=device)
             client_build = chromadb.PersistentClient(path=DB_PATH, settings=Settings(allow_reset=True, is_persistent=True, anonymized_telemetry=False))
             collection_build = client_build.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space":"cosine"})
