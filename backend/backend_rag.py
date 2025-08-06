@@ -445,24 +445,24 @@ def handle_query_stream(query: str, chat_history: list):
             if sources:
                 logging.warning(f"No direct context found or context deemed irrelevant for '{query}'. Providing fallback resources: {sources}")
                 fallback_message = "I couldn't find a direct answer to your question in my knowledge base. However, the query returned the following documents which may contain related information. You can review them to see if they are helpful in any way:"
-                yield "text", fallback_message
-                yield "sources", sources
+                yield {"text": fallback_message}
+                yield {"sources": sources}
             else:
                 logging.warning(f"No relevant documents found for query: '{query}'. Aborting generation.")
-                yield 'text', "I couldn't find any information related to your query in my knowledge base. Please try rephrasing your question."
-                yield "sources", []
+                yield {"text": "I couldn't find any information related to your query in my knowledge base. Please try rephrasing your question."}
+                yield {"sources": []}
             return
         deduplicated_docs = deduplicate_context(context_docs)
         answer_generator = generate_answer_stream(query, deduplicated_docs, history_str)
         full_response_text = "".join([token for token in answer_generator])
         cleaned_response = parse_and_clean_output(full_response_text)
         if cleaned_response:
-            yield "text", cleaned_response
-        yield "sources", sources
+            yield {"text": cleaned_response}
+        yield {"sources": sources}
     except Exception as e:
         logging.error(f"An error occurred while handling the query: {e}", exc_info=True)
-        yield "error", "An internal error occurred while generating the response."
-        yield "sources", []
+        yield {"error": "An internal error occurred while generating the response."}
+        yield {"sources": []}
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Backend script for the CHLA RAG chatbot. Run with --rebuild to populate the database.")
