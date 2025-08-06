@@ -17,6 +17,8 @@ STATIC_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
 CORS(app) # Enable CORS for all routes
 
+main.initialize_backend_components()
+
 # Get public API URL from environment variable, default to localhost
 PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:5000").rstrip('/')
 
@@ -44,26 +46,21 @@ def chat():
     data = request.json
     user_query = data.get('query')
     conversation_history = data.get('history', [])
-
     if not user_query:
         return jsonify({"error": "Query not provided"}), 400
-
     logging.info(f"Received query: {user_query}")
-
     def generate():
         """Generator function to stream RAG responses."""
         try:
             full_response_content = ""
             sources_info = [] # To accumulate sources
-
             # Iterate through chunks received from the RAG backend
-            for chunk in main.rag_query(user_query, conversation_history):
+            for chunk in main.handle_query_stream(user_query, conversation_history):
                 if "text" in chunk:
                     text_content = chunk["text"]
                     full_response_content += text_content
                     # Send text chunk as JSON data
                     yield f"data: {json.dumps({'text': text_content})}\n\n"
-                
                 if "sources" in chunk:
                     # Update sources as they come in (assuming cumulative updates or final set)
                     sources_info = chunk["sources"]
@@ -76,12 +73,10 @@ def chat():
                         formatted_sources.append({"filename": filename, "url": source_url})
                     # Send updated sources as JSON data
                     yield f"data: {json.dumps({'sources': formatted_sources})}\n\n"
-                
                 if "error" in chunk:
                     # If an error occurs in the backend, stream it and break
                     yield f"data: {json.dumps({'error': chunk['error']})}\n\n"
                     break # Stop streaming on error
-
         except Exception as e:
             # Catch any unexpected errors during streaming and send an error message
             logging.error(f"Error during chat streaming: {e}")
@@ -138,7 +133,5 @@ if __name__ == '__main__':
     # This block is for local development only.
     # In a production deployment (e.g., with Gunicorn), this block will not be executed.
     logging.info("Starting Flask app in development mode.")
-    # Uncomment the line below if you need to initialize backend components when running app.py directly
-    # main.initialize_backend_components()
     app.run(host='0.0.0.0', port=5000, debug=True)
 

@@ -215,8 +215,8 @@ export default function App() {
           <div className="flex-1">
             <h1 className="text-xl font-bold">CHLA Virtual Health Librarian</h1>
             <p className="text-sm font-light opacity-90">Children's Hospital Los Angeles</p>
-            <p className="text-xs font-light mt-1">
-              Created by CHLA Capstone Team: Sam Biner, Jake Lestyk, Wanqiu Zhang, Jeenal Choudhary
+            <p className={`text-xs mt-1 font-semibold ${darkMode ? 'text-gray-400' : 'text-blue-200'}`}>
+              Created by LMU's CHLA Capstone Team: Sam Biner, Jake Lestyk, Wanqiu Zhang, Jeenal Choudhary
             </p>
           </div>
           {/* Dark Mode Toggle */}
