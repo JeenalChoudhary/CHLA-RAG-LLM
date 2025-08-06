@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import fitz
 import chromadb
 from chromadb.config import Settings
@@ -30,7 +31,7 @@ SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
 FINAL_CONTEXT_COUNT = 10
-RERANKER_SCORE_THRESHOLD = 0.0
+RERANKER_SCORE_THRESHOLD = 0.75
 
 _embedding_models = None
 _llm_models = None
@@ -84,14 +85,16 @@ def clean_pdf_text(text: str) -> str:
     text = re.sub(r"https?://\S+|www\.\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"©\s*\d{4}.*LLC.*", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"Disclaimer:.*|This information is not intended as a substitute for professional medical care.*|This information is intended for general knowledge.*", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'^(.*?)\s*\.{3,}\s*\d+\s*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'(?im)^\s*(Division of .*|Otolaryngology|Approved by PFE .*)\s*$', '', text)
-    text = re.sub(r'(?im)^\s*page \d+( of \d+)?\s*$', '', text)
-    text = re.sub(r'(?im)^\s*\d+\s*$', '', text)
-    text = re.sub(r"\s*\n\s*", "\n", text).strip()
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r" {2,}", " ", text)
-    return text
+    text = re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', text) #Removes words broken across lines like resuscita-tion to resuscitation
+    text = re.sub(r'^(.*?)\s*\.{3,}\s*\d+\s*$', '', text, flags=re.MULTILINE) #Removes TOC style dot leaders
+    text = re.sub(r'•\s*([a-zA-Z])', r'\n\n• \1', text) #Add space and break before bullets
+    text = re.sub(r'([a-zA-Z0-9]\.)([a-zA-Z])', r'\1 \2', text) #Adds space before numbered lists
+    text = re.sub(r'([.?!])([A-Z])', r'\1 \2', text) #separates concatenated sentences from headings
+    text = re.sub(r'[ \t]+', ' ', text) #Replaces multiple spaces with one
+    text = re.sub(r'\n\s*\n', '\n\n', text) #Replaces multi-line breaks with standard double break
+    text = '\n'.join(line for line in text.splitlines() if text.strip())
+    return text.strip()
 
 # ---- Document Processing Functions ----
 def load_and_process_docs(directory):
@@ -146,25 +149,54 @@ def load_and_process_docs(directory):
 
 def generate_hypothetical_document(query: str) -> list:
     prompt = f"""
-    You are a query generation AI. Your task is to create a JSON list of 5 diverse, alternative versions of the given user question.
-    The goal is to rephrase the question in different ways to maximize the chance of finding relevant documents in a vector database.
-    Each variation should be a complete, standalone question.
+    You are a helpful AI assistant specializing in query variation for a medical information retrieval system.
+    Your task is to rephrase the given 'User Question' in 4 different ways to improve search results.
     
-    **User Question:**
-    {query}
+    **--- CRITICAL RULES ---**
+    1. **Preserve Keywords:** You MUST identify and preserve all critical medical or technical keywords from the original question (e.g., "CPR", "choked", "DNR", "compressions", "rescue breathing"). Do not replace them with generic synonyms.
+    2. **Maintain Intent:** Each rephrased question must keep the exact same intent as the original.
+    3. **Be Concise:** The rephrased questions should be clear, direct search queries. Do not add conversational fluff.
+    4. **No Philosophical Questions:** Do not generate abstract or philosophical questions about "circumstances" or "interpretations". Focus only on concrete information retrieval.
     
-    **Output Format:** Provide a single, valid JSON list of strings.
-    **JSON list of questions:**
+    **--- EXAMPLES ---**
+    
+    **User Question:** "What if I see a 'DNR' bracelet on them?"
+    **Output:**
+    [
+        "how to respond to a DNR order during an emergency",
+        "performing CPR on someone with a DNR bracelet",
+        "what does a Do Not Resuscitate bracelet mean for first aid",
+        "legal requirements when a patient has a DNR"
+    ]
+    
+    **User Question:** "What if I think they choked on something?"
+    **Output:**
+    [
+        "first aid for a choking child",
+        "how to help someone who is choking",
+        "what to do if an airway is obstructed by an object",
+        "difference between choking response and CPR"
+    ]
+    
+    **--- YOUR TASK ---**
+    
+    **User Question:** "{query}"
+    **Output (provide a single, valid JSON list of 4 strings):**
     """
-    response = _llm_models.complete(prompt)
-    response_text = response.text.strip()
     try:
-        sub_questions = re.findall(r'"(.*?)"', response_text)
+        response = _llm_models.complete(prompt)
+        response_text = response.text.strip()
+        match = re.search(r'\[.*\]', response_text, flags=re.DOTALL)
+        if not match:
+            logging.warning(f"Could not find a JSON list in the LLM response for query expansion. Raw response: {response_text}")
+            return []
+        json_content = match.group(0)
+        sub_questions = json.loads(json_content)
         if sub_questions:
-            logging.info(f"Successfully generated sub-questions: {sub_questions}")
+            logging.info(f"Successfully generated keyword-preservedsub-questions: {sub_questions}")
             return sub_questions
         else:
-            logging.warning("Regex found no questions. Falling back to the original user query.")
+            logging.warning("Regex found no questions in the JSON structure. Falling back to original query.")
             return []
     except Exception as e:
         logging.error(f"Failed to parse the questions with Regex: {e}. Raw text: {response_text}")
@@ -175,48 +207,79 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
         logging.info(f"No conversation history detected. Using the original query: '{query}'")
         return query
     prompt = f"""
-    You are an expert query rewriting AI. Your task is to rephrase a follow-up question from a user into a clear, self-contained question.
+    You are an expert AI assistant specializing in query rewriting. Your task is to transform a conversational follow-up question into a clear, self-contained question that can be understood without the chat history.
     
-    **Instructions:**
-    1. Analyze the 'Conversation History' to identify the main topic (e.g., 'tracheostomy tube cleaning', 'child's breathing tube').
-    2. The 'Follow-up Question' is often short and relies on context (e.g., using "it", "they", "that").
-    3. You MUST rewrite the 'Follow-up Quesion' to include the specific topic from the history.
-    4. Your output MUST be ONLY the rewritten question and nothing else.
+    You must perform two steps:
+    1. **Identify the Core Topic:** Analyze the chat history to determine the central medical topic (e.g., "CPR for children", "Tracheostomy Tube Care", "Anaphylactic Shock").
+    2. **Rewrite the Question:** Rewrite the "Rewritten Question" to be a standalone query, incorporating necessary context from the history. Do not add explanation or preamble to your answer.
     
-    -----
-    **Example 1:**
-    <conversation_history>
-    User: What does a breathing tube in the neck do?
-    Assistant: A breathing tube in the neck carries oxygen from the ventilator to the person...
-    </conversation_history>
+    Your final output MUST be in the format: "(Topic: [Identified Topic]) [Rewritten Question]"
     
-    Follow-up Question: "Is it a permanent solution?"
-    Rewritten Standalone Question: "Is a breathing tube in the neck a permanent solution?"
-    -----
-    **Example 2:**
-    <conversation_history>
-    User: I want help with trach tube cleaning and safety.
-    Assistant: Okay, let's talk about trach tube cleaning and safety...
-    </conversation_history>
+    ### Example 1:
+    Chat History:
+    User: What are the main features of the Gemma 3 model?
+    AI: Gemma 3 models are multimodal, have a 128K context window, and support over 140 languages.
+    New Question:
+    What about the 1B model?
+    Rewritten Question:
+    What are the main features of the Gemma 3 1B model?
     
-    Follow-up Question: "How often does that need to be done?"
-    Rewritten Standalone Question: "How often does tracheostomy tube cleaning need to be done?"
-    -----
+    ### Example 2:
+    Chat History:
+    User: Tell me about its context window.
+    AI: The 4B, 12B, and 27B sizes have a 128K context window.
+    New Question:
+    And the smallest one?
+    Rewritten Question:
+    What is the context window size for the smallest Gemma 3 model?
     
-    **CURRENT TASK:**
+    ### Example 3:
+    Chat History:
+    User: How can I run it locally?
+    AI: You can run quantized versions on consumer GPUs. The 12B int4 model runs on GPUs with 8GB VRAM.
+    New Question:
+    What are the limitations of Gemma 3?
+    Rewritten Question:
+    What are the limitations of Gemma 3?
     
-    <conversation_history>
+    ### Example 4:
+    Chat History:
+    User: How is CPR for kids different from adult CPR?
+    AI: The main difference is in the chest compressions...
+    New Question:
+    At what age do I switch to the adult method?
+    Rewritten Question:
+    (Topic: CPR for Children) At what age should you switch from the child CPR method to the adult CPR method?
+    
+    ### Example 5:
+    Chat History:
+    User: Tell me about cleaning a trach tube.
+    AI: You should clean it twice a day...
+    New Question:
+    What supplies do I need?
+    Rewritten Question:
+    (Topic: Tracheostomy Tube Care) What supplies are needed for cleaning a tracheostomy tube?
+    
+    ### Example 6:
+    Chat History:
+    User: How do I give rescue breathing?
+    AI: Give 1 breath every 2-3 seconds...
+    New Question:
+    Is that the same for infants?
+    Rewritten Question:
+    (Topic: Rescue Breathing) Is the rescue breathing technique the same for infants?
+    
+    ### CURRENT TASK
+    Chat History:
     {conversation_history}
-    </conversation_history>
-    
-    **Follow-up Question:** "{query}"
-    
-    **Rewritten Standalone Question (must be ONLY the rewritten or original question):**
+    New Question:
+    {query}
+    Rewritten Question:
     """
     try:
         logging.info("Rewriting query based on conversation history...")
         response = _llm_models.complete(prompt)
-        rewritten_query = response.text.strip().strip('"')
+        rewritten_query = response.text.strip()
         logging.info(f"Rewritten query: '{rewritten_query}'")
         if rewritten_query.lower() != query.lower():
             logging.info(f"Successfully rewrote user query: '{rewritten_query}'")
@@ -227,9 +290,26 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
         logging.error(f"Failed to rewrite query: {e}. Using original query.")
         return query
 
+def sanitize_rewritten_query(query: str) -> str:
+    smart_quotes_map = {
+        u'\u201c': '"',
+        u'\u201d': '"',
+        u'\u2018': "'",
+        u'\u2019': "'"
+    }
+    pattern = re.compile("|".join(smart_quotes_map.keys()))
+    sanitize_text = pattern.sub(lambda m: smart_quotes_map[m.group(0)], query)
+    return sanitize_text.strip()
+
+def normalize_scores(logits: list[float]) -> list[float]:
+    tensor_logits = torch.tensor(logits)
+    probabilities = torch.sigmoid(tensor_logits)
+    return probabilities.tolist()
+
 def retrieve_context(query: str, conversation_history: str = "", n_results: int = FINAL_CONTEXT_COUNT):
     logging.info(f"Retrieving context for query: '{query}'")
-    standalone_query = rewrite_query_with_history(query, conversation_history)
+    raw_standalone_query = rewrite_query_with_history(query, conversation_history)
+    standalone_query = sanitize_rewritten_query(raw_standalone_query)
     all_queries = [standalone_query] + generate_hypothetical_document(standalone_query)
     retrieved_doc_set = {}
     logging.info(f"Performing multi-query retrieval for {all_queries}")
@@ -239,24 +319,24 @@ def retrieve_context(query: str, conversation_history: str = "", n_results: int 
         for i, doc_content in enumerate(results['documents'][0]):
             if doc_content not in retrieved_doc_set:
                 retrieved_doc_set[doc_content] = results['metadatas'][0][i]
-        if not retrieved_doc_set:
-            logging.warning(f"Multi-query retrieval returned no relevant documents for reranking.")
-            return [], [], standalone_query
+    if not retrieved_doc_set:
+        logging.warning(f"Multi-query retrieval returned no relevant documents for reranking.")
+        return [], [], standalone_query
     retrieved_docs = list(retrieved_doc_set.keys())
     retrieved_metadata = list(retrieved_doc_set.values())
     logging.info(f"Retrieved {len(retrieved_docs)} documents for reranking.")
     logging.info(f"Reranking documents against the query: '{standalone_query}'")
     rerank_pairs = [[query, doc] for doc in retrieved_docs]
-    scores = _reranker_model.predict(rerank_pairs, show_progress_bar=False)
-    sorted_docs = sorted(zip(scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
+    logit_scores = _reranker_model.predict(rerank_pairs, show_progress_bar=False)
+    normalized_scores = normalize_scores(logit_scores)
+    sorted_docs = sorted(zip(normalized_scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
     top_5_scores = [f"{score:.4f}" for score, _, _, in sorted_docs[:5]]
     logging.info(f"Top 5 reranker scores: {top_5_scores}")
-    FALLBACK_SCORE_COUNT = 5
-    top_fallback_docs = sorted_docs[:FALLBACK_SCORE_COUNT]
-    fallback_sources = sorted(list(set(meta['source'] for socre, doc, meta in top_fallback_docs)))
     top_reranked_docs = [doc for doc in sorted_docs if doc[0] >= RERANKER_SCORE_THRESHOLD][:n_results]
     if not top_reranked_docs:
         logging.warning(f"No documents met the relevance threshold of {RERANKER_SCORE_THRESHOLD}. Top score: {sorted_docs[0][0]} from the document '{sorted_docs[0][1]}'. Aborting generation and falling back.")
+        top_fallback_docs = sorted_docs[:5]
+        fallback_sources = sorted(list(set(meta['source'] for socre, doc, meta in top_fallback_docs)))
         return [], fallback_sources, standalone_query
     final_docs = [doc for score, doc, meta in top_reranked_docs]
     final_metadata = [meta for score, doc, meta in top_reranked_docs]
@@ -277,18 +357,29 @@ def generate_answer_stream(query: str, context_docs: list, conversation_history:
     prompt_template = f"""
     **Persona:** You are an expert medical educator at Children's Hospital Los Angeles. Your mission is to provide helpful, reassuring, and empathetic guidance to worried parents and patients. Your language MUST be simple, clear, and easy to understand.
    
-    **--- YOUR MOST IMPORTANT RULES ---**
-    1. **Context is Your Only Source:** Your entire response MUST be generated using ONLY the information from the `CONTEXT` section below. Do not use any outside knowledge.
+    **--- HEIRARCHY OF RULES (MOST IMPORTANT FIRST) ---**
     
-    2. **Precision is Key:** Pay close attention to keywords and details in the user's `Question` (like age, e.g., 'child' or 'teen'). Your answer must be tailored to these specifics. If the context has information for both adults and children, only provide the information relevant to the user's query.
+    ## 1. THE PRIME DIRECTIVE: DO NO HARM
+    Your primary responsibility is user safety. If you are ever faced with ambiguity or conflicting information, you MUST choose the safest, most conservative interpretation. Never provide information that could be misinterpreted as a dangerous instruction.
     
-    3. **Be a Helpful Filter:** If a piece of information in the `CONTEXT` is not directly relevant to the user's specific `Question`, you MUST ignore it. A short, accurate answer is better than a long, confusing one.
+    ## 2. THE CONTEXT IS YOUR ONLY UNIVERSE
+    Your entire response MUST be generated using ONLY the information from the `CONTEXT` section below. Do not use any outside knowledge. If the context does not contain the answer, you MUST state that you cannot find the information.
     
-    4. **Synthesize, Don't Just List:** Combine the relevant facts from the `CONTEXT` into a single, cohesive, and logical answer. Use lists and bolding to make the information easy to digest.
+    ## 3. ANTI-SYNTHESIS SAFETY PROTOCOL (CRITICAL)
+    This is your most important logical rule. You MUST NOT merge facts from different documents to create a *new* instruction or conclusion that is not explicitly stated within a *single* source document.
+    - **Correct Example:** If one doc says "Start CPR if there is no pulse" and another doc defines "Brain Death", you must NOT combine them. You would answer the CPR question and ignore the brain death information as it is out of context.
+    - **Incorrect (Forbidden) Example:** Combining the two facts above to claim that starting CPR is related to brain death.
+    - **Action:** If documents seem to conflict or discuss different topics, address only the parts directly relevant to the user's question and ignore the rest.
     
-    5. **Guide the User on Broad Queries:** If the user's `Question` is broad or vague (e.g., "asthma", "heart disease", "diabetes", "belly bug"), provide a brief overview from the context and then suggest 2-3 specific follow-up questions to help guide them.
+    ## 4. GRACEFUL IGNORANCE PROTOCOL
+    If the provided `CONTEXT` is weak, irrelevant, or does not directly and confidently answer the user's specific `Question`, you MUST refuse to answer.
+    - **Trigger this rule if:** The context talks about a general topic (e.g., "transfers") but the question is highly specific and not addressed (e.g., "Should I move someone having a seizure?").
+    - **Your response in this case MUST be:** "I was able to find some general information on [Topic], but I could not find a specific answer to your question about [User's Specific Question] in my knowledge base."
     
-    6. **Safety First:** Under NO circumstances will you provide URLs, suggest external websites, or include disclaimers about the information not being medical advice.
+    ## 5. STANDARD OPERATING RULES
+    - **Synthesize, Don't List:** Combine relevant facts from a *single, coherent source* or *multiple sources that explicitly agree* into a cohesive answer. Use lists and bolding for clarity.
+    - **Guide on Board Queries:** For broad queries, provide a brief overview and suggest 2-3 specific follow-up questions to guide the user.
+    - **No External Info:** Never provide URLs, suggest external websites, or include disclaimers about medical advice.
 
     ---
     CONTEXT:
@@ -330,33 +421,6 @@ def parse_and_clean_output(text: str) -> str:
     text = re.sub(r"\*\*?(important resources|additional resources|resources)\*\*?:?", "", text, flags=re.IGNORECASE)
     return text.strip()
 
-def is_context_relevant(query: str, context_docs: list) -> bool:
-    if not context_docs:
-        return False
-    context = "\n\n---\n\n".join(context_docs)
-    prompt = f"""
-    You are a relevance-checking AI. Your task is to determine if the provided CONTEXT contains information that can directly answer the user's QUESTION.
-    Read the user's QUESTION and the CONTEXT below.
-    Your answer MUST be a single word: either "yes" or "no".
-    
-    ---
-    CONTEXT:
-    {context}
-    ---
-    QUESTION: {query}
-    ---
-    
-    Can the CONTEXT be used to directly answer the QUESTION? Answer with only "yes" or "no".
-    """
-    try:
-        response = _llm_models.complete(prompt)
-        answer = response.text.strip().lower()
-        logging.info(f"Relevance check for query '{query}'. LLM Answered: '{answer}'")
-        return "yes" in answer
-    except Exception as e:
-        logging.error(f"Relevance check failed: {e}")
-        return False
-
 def handle_query_stream(query: str, chat_history: list):
     global _collection
     if _collection is None:
@@ -377,8 +441,7 @@ def handle_query_stream(query: str, chat_history: list):
     history_str = "\n".join(cleaned_history)
     try:
         context_docs, sources, final_query = retrieve_context(query, history_str)
-        is_relevant = is_context_relevant(final_query, context_docs)
-        if not context_docs or not is_relevant:
+        if not context_docs:
             if sources:
                 logging.warning(f"No direct context found or context deemed irrelevant for '{query}'. Providing fallback resources: {sources}")
                 fallback_message = "I couldn't find a direct answer to your question in my knowledge base. However, the query returned the following documents which may contain related information. You can review them to see if they are helpful in any way:"
@@ -424,7 +487,7 @@ if __name__ == "__main__":
             embedding_model_build = SentenceTransformer(EMBEDDING_MODEL_NAMES, device=device)
             client_build = chromadb.PersistentClient(path=DB_PATH, settings=Settings(allow_reset=True, is_persistent=True, anonymized_telemetry=False))
             collection_build = client_build.get_or_create_collection(name=COLLECTION_NAME, metadata={"hnsw:space":"cosine"})
-            batch_size = 128
+            batch_size = 256
             total_batches = (len(chunks) + batch_size - 1) // batch_size
             logging.info(f"Embedding {len(chunks)} chunks in {total_batches} batches...")
             for i in range(0, len(chunks), batch_size):
