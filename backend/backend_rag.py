@@ -21,12 +21,11 @@ DATA_DIRECTORY = os.path.join(SCRIPT_DIRECTORY, "data")
 PDF_DIRECTORY = os.path.join(DATA_DIRECTORY, "docs")
 DB_PATH = os.path.join(DATA_DIRECTORY, "db")
 CACHE_DIR = os.path.join(DATA_DIRECTORY, "cache")
-PROCESSED_DOCS_CACHE = os.path.join(CACHE_DIR, "processed_docs.json")
 
 COLLECTION_NAME = "example_health_docs"
 EMBEDDING_MODEL_NAMES = "BAAI/bge-m3"
 RERANKER_MODEL_NAME = 'cross-encoder/ms-marco-MiniLM-L4-v2'
-LLM_MODEL_NAME = "gemma3:1b-it-qat"
+LLM_MODEL_NAME = "granite3-dense:2b" #qwen3:4b and qwen3:4b-thinking
 SENTENCES_PER_CHUNK = 6
 STRIDE = 2
 INITIAL_RETRIEVAL_COUNT = 20
@@ -93,7 +92,7 @@ def clean_pdf_text(text: str) -> str:
     text = re.sub(r'([.?!])([A-Z])', r'\1 \2', text) #separates concatenated sentences from headings
     text = re.sub(r'[ \t]+', ' ', text) #Replaces multiple spaces with one
     text = re.sub(r'\n\s*\n', '\n\n', text) #Replaces multi-line breaks with standard double break
-    text = '\n'.join(line for line in text.splitlines() if text.strip())
+    text = '\n'.join(line for line in text.splitlines() if line.strip())
     return text.strip()
 
 # ---- Document Processing Functions ----
@@ -149,33 +148,33 @@ def load_and_process_docs(directory):
 
 def generate_hypothetical_document(query: str) -> list:
     prompt = f"""
-    You are a helpful AI assistant specializing in query variation for a medical information retrieval system.
-    Your task is to rephrase the given 'User Question' in 4 different ways to improve search results.
+    You are a helpful AI assistant specializing in generating hypothetical user questions for a medical information retrieval system. Your goal is to anticipate how different users might ask about the same topic.
+    Your task is to take the original 'User Question' and generate 4 alternative, complete questions that a real user might ask to find the same information.
     
     **--- CRITICAL RULES ---**
-    1. **Preserve Keywords:** You MUST identify and preserve all critical medical or technical keywords from the original question (e.g., "CPR", "choked", "DNR", "compressions", "rescue breathing"). Do not replace them with generic synonyms.
-    2. **Maintain Intent:** Each rephrased question must keep the exact same intent as the original.
-    3. **Be Concise:** The rephrased questions should be clear, direct search queries. Do not add conversational fluff.
-    4. **No Philosophical Questions:** Do not generate abstract or philosophical questions about "circumstances" or "interpretations". Focus only on concrete information retrieval.
+    1. **Format as Full Questions** Each alternate MUST be a complete, grammatically correct question. It should sound like a natural question a person would type (e.g., start with "What", "How", "Is", and "When").
+    2. **Preserve Core Concepts:** You MUST identify and preserve all critical medical or technical terms from the original question (e.g., "CPR", "choked", "DNR", "tracheostomy"). Do not replace them with vague synonyms.
+    3. **Maintain User Intent:** Each new question must seek the same core answer as the original. Do not change the topic or introduce new concepts.
+    4. **Focus on Actionable Information:** Generate questions that seek concrete steps, definitions, or procedures. Avoid abstract or philosophical questions.
     
     **--- EXAMPLES ---**
     
     **User Question:** "What if I see a 'DNR' bracelet on them?"
     **Output:**
     [
-        "how to respond to a DNR order during an emergency",
-        "performing CPR on someone with a DNR bracelet",
-        "what does a Do Not Resuscitate bracelet mean for first aid",
-        "legal requirements when a patient has a DNR"
+        "How should I respond to a DNR order in an emergency?",
+        "Am I allowed to perform CPR on someone with a DNR bracelet?",
+        "What does a 'Do Not Resuscitate' bracelet mean for providing first aid?",
+        "What are the legal requirements when a patient has a DNR?"
     ]
     
     **User Question:** "What if I think they choked on something?"
     **Output:**
     [
-        "first aid for a choking child",
-        "how to help someone who is choking",
-        "what to do if an airway is obstructed by an object",
-        "difference between choking response and CPR"
+        "How do I perform first aid on a choking child?",
+        "What are the steps to help someone who is choking?",
+        "What should I do if a person's airway is obstructed by an object?",
+        "Is the response for choking different from performing CPR?"
     ]
     
     **--- YOUR TASK ---**
@@ -183,23 +182,26 @@ def generate_hypothetical_document(query: str) -> list:
     **User Question:** "{query}"
     **Output (provide a single, valid JSON list of 4 strings):**
     """
+    logging.info(f"Generating hypothetical questions for query: '{query}'")
+    response = _llm_models.complete(prompt)
+    response_text = response.text.strip()
     try:
-        response = _llm_models.complete(prompt)
-        response_text = response.text.strip()
         match = re.search(r'\[.*\]', response_text, flags=re.DOTALL)
         if not match:
             logging.warning(f"Could not find a JSON list in the LLM response for query expansion. Raw response: {response_text}")
             return []
         json_content = match.group(0)
         sub_questions = json.loads(json_content)
-        if sub_questions:
+        if isinstance(sub_questions, list) and len(sub_questions) > 0:
             logging.info(f"Successfully generated keyword-preservedsub-questions: {sub_questions}")
             return sub_questions
         else:
             logging.warning("Regex found no questions in the JSON structure. Falling back to original query.")
             return []
+    except json.JSONDecodeError as e:
+        logging.error(f"Failed to decode JSON from LLM response: {e}. Raw text: '{response_text}'")
     except Exception as e:
-        logging.error(f"Failed to parse the questions with Regex: {e}. Raw text: {response_text}")
+        logging.error(f"Failed to parse the questions with Regex: {e}. Raw text: '{response_text}'")
         return []
     
 def rewrite_query_with_history(query: str, conversation_history: str) -> str:
@@ -207,42 +209,17 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
         logging.info(f"No conversation history detected. Using the original query: '{query}'")
         return query
     prompt = f"""
-    You are an expert AI assistant specializing in query rewriting. Your task is to transform a conversational follow-up question into a clear, self-contained question that can be understood without the chat history.
+    You are an expert AI assistant specializing in analyzing conversational context and rewriting queries. Your task is to make user questions self-contained, but ONLY if they are a direct follow-up to the existing chat history.
     
     You must perform two steps:
-    1. **Identify the Core Topic:** Analyze the chat history to determine the central medical topic (e.g., "CPR for children", "Tracheostomy Tube Care", "Anaphylactic Shock").
-    2. **Rewrite the Question:** Rewrite the "Rewritten Question" to be a standalone query, incorporating necessary context from the history. Do not add explanation or preamble to your answer.
+    1. **Assess Relevance:** First, determine if the 'New Question' is a direct follow-up to the 'Chat History', or if it introduces a new, unrelated topic.
+    2. **Act Accordingly:**
+        * **If the question IS a follow-up**, rewrite it to be a standalone query, incorporating necessary context from the history. Your output MUST be in the format "(Topic: [Identified Topic]) [Rewritten Question]".
+        * **If the question IS A NEW TOPIC**, you MUST ignore the history and output the 'New Question' exactly as it is, without any changes or added topic.
     
-    Your final output MUST be in the format: "(Topic: [Identified Topic]) [Rewritten Question]"
-    
+    --- EXAMPLES OF FOLLOW-UP QUESTIONS (REWRITING IS NEEDED) ---
+
     ### Example 1:
-    Chat History:
-    User: What are the main features of the Gemma 3 model?
-    AI: Gemma 3 models are multimodal, have a 128K context window, and support over 140 languages.
-    New Question:
-    What about the 1B model?
-    Rewritten Question:
-    What are the main features of the Gemma 3 1B model?
-    
-    ### Example 2:
-    Chat History:
-    User: Tell me about its context window.
-    AI: The 4B, 12B, and 27B sizes have a 128K context window.
-    New Question:
-    And the smallest one?
-    Rewritten Question:
-    What is the context window size for the smallest Gemma 3 model?
-    
-    ### Example 3:
-    Chat History:
-    User: How can I run it locally?
-    AI: You can run quantized versions on consumer GPUs. The 12B int4 model runs on GPUs with 8GB VRAM.
-    New Question:
-    What are the limitations of Gemma 3?
-    Rewritten Question:
-    What are the limitations of Gemma 3?
-    
-    ### Example 4:
     Chat History:
     User: How is CPR for kids different from adult CPR?
     AI: The main difference is in the chest compressions...
@@ -250,8 +227,8 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
     At what age do I switch to the adult method?
     Rewritten Question:
     (Topic: CPR for Children) At what age should you switch from the child CPR method to the adult CPR method?
-    
-    ### Example 5:
+
+    ### Example 2:
     Chat History:
     User: Tell me about cleaning a trach tube.
     AI: You should clean it twice a day...
@@ -259,15 +236,26 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
     What supplies do I need?
     Rewritten Question:
     (Topic: Tracheostomy Tube Care) What supplies are needed for cleaning a tracheostomy tube?
-    
-    ### Example 6:
+
+    --- EXAMPLES OF NEW TOPICS (REWRITING IS NOT NEEDED) ---
+
+    ### Example 3:
     Chat History:
-    User: How do I give rescue breathing?
-    AI: Give 1 breath every 2-3 seconds...
+    User: Tell me about cleaning a trach tube.
+    AI: You should clean it twice a day...
     New Question:
-    Is that the same for infants?
+    What are the symptoms of asthma?
     Rewritten Question:
-    (Topic: Rescue Breathing) Is the rescue breathing technique the same for infants?
+    What are the symptoms of asthma?
+
+    ### Example 4:
+    Chat History:
+    User: How is CPR for kids different from adult CPR?
+    AI: The main difference is in the chest compressions...
+    New Question:
+    Tell me about the causes of obesity.
+    Rewritten Question:
+    Tell me about the causes of obesity.
     
     ### CURRENT TASK
     Chat History:
@@ -284,7 +272,7 @@ def rewrite_query_with_history(query: str, conversation_history: str) -> str:
         if rewritten_query.lower() != query.lower():
             logging.info(f"Successfully rewrote user query: '{rewritten_query}'")
         else:
-            logging.warning(f"Query was already self-contained. No rewrite needed.")
+            logging.warning(f"Query was already self-contained and identified as a new topic. No rewrite needed.")
         return rewritten_query
     except Exception as e:
         logging.error(f"Failed to rewrite query: {e}. Using original query.")
@@ -330,7 +318,7 @@ def retrieve_context(query: str, conversation_history: str = "", n_results: int 
     logit_scores = _reranker_model.predict(rerank_pairs, show_progress_bar=False)
     normalized_scores = normalize_scores(logit_scores)
     sorted_docs = sorted(zip(normalized_scores, retrieved_docs, retrieved_metadata), key=lambda x: x[0], reverse=True)
-    top_5_scores = [f"{score:.4f}" for score, _, _, in sorted_docs[:5]]
+    top_5_scores = [f"{score:.4f}" for score, _, in sorted_docs[:5]]
     logging.info(f"Top 5 reranker scores: {top_5_scores}")
     top_reranked_docs = [doc for doc in sorted_docs if doc[0] >= RERANKER_SCORE_THRESHOLD][:n_results]
     if not top_reranked_docs:

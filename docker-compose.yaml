@@ -1,6 +1,6 @@
 services:
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.11.4
     container_name: ollama
     deploy:
       resources:
@@ -13,7 +13,7 @@ services:
       - ollama_data:/root/.ollama
       - ./entrypoint.sh:/entrypoint.sh
     environment:
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3:1b-it-qat}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3:12b-it-qat}
     entrypoint: /entrypoint.sh
     ports:
       - "11434:11434"

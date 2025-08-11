@@ -244,16 +244,15 @@ export default function App() {
               </div>
             )
           ))}
-          {isLoading && (
+          {/*{isLoading && (
             <div className="flex justify-start">
-              {/* This div now matches the assistant's message bubble styling */}
               <div className={`max-w-[75%] p-3 rounded-xl shadow-md ${darkMode ? 'bg-gray-700 text-gray-100' : 'bg-white text-gray-800'} rounded-bl-none border ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                 <div className="flex items-center space-x-2">
                   <div className="dot-flashing"></div>
                 </div>
               </div>
             </div>
-          )}
+          )}*/}
           <div ref={messagesEndRef} /> {/* Scroll target */}
         </div>
 

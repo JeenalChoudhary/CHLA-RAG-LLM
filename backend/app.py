@@ -134,4 +134,3 @@ if __name__ == '__main__':
     # In a production deployment (e.g., with Gunicorn), this block will not be executed.
     logging.info("Starting Flask app in development mode.")
     app.run(host='0.0.0.0', port=5000, debug=True)
-
